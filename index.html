@@ -250,9 +250,9 @@ tr:last-child td{border:none;}
   <div id="tab-accuracy" style="display:none;"></div>
   <div id="tab-cities" style="display:none;"></div>
 
-  <div class="footer-note">
+  <div class="footer-note" id="footerNote">
     Live data from Open‑Meteo (open‑source weather API, no key required). AI predictions are computed in your browser<br>
-    from a linear regression trained on 2 years of Alpharetta, GA history — see the Model tab for methodology.
+    from a linear regression trained fresh on 2 years of this city's own history — see the Model tab for methodology.
   </div>
 </div>
 
@@ -269,21 +269,9 @@ const DEFAULT_CITIES = [
   {name:"New York", country:"United States", admin1:"New York", lat:40.7128, lon:-74.0060, tz:"America/New_York"},
 ];
 
-// Model trained on Alpharetta 2yr daily data (extracted from the notebook's LinearRegression fit)
-const MODEL = {
-  intercept: 79.263,
-  coef: {
-    temp_mean_lag1: -0.309292,
-    temp_mean_lag2: 0.145799,
-    humidity_lag1: -0.053528,
-    precip_lag1: -0.310910,
-    temp_std_7d: -0.054891,
-    day_sin: -0.853557,
-    day_cos: -4.125488,
-    hdd: -0.947257,
-    cdd: 0.916580
-  },
-  metrics: {mae: 3.29, rmse: 4.32, r2: 0.828},
+// Reference only: the ORIGINAL offline research on Alpharetta 2yr data (fixed model-family comparison
+// from the notebook). Every city now gets its own model trained live in the browser — see trainCityModel().
+const ALPHARETTA_REFERENCE = {
   comparison: [
     {model:"Linear Regression", mae:3.288, rmse:4.322, r2:0.828},
     {model:"Ridge Regression", mae:3.303, rmse:4.349, r2:0.826},
@@ -292,7 +280,6 @@ const MODEL = {
     {model:"Gradient Boosting", mae:3.660, rmse:4.806, r2:0.788},
     {model:"Random Forest", mae:3.802, rmse:5.066, r2:0.764},
   ],
-  trainInfo:{rows:724, start:"2024-07-13", end:"2026-07-06", split:"80/20 chronological (579 train / 145 test)"}
 };
 
 const WMO = {
@@ -320,10 +307,12 @@ let state = {
   activeTab: 'today',
   liveCache: {},   // key -> {current, hourly, daily, fetchedAt}
   archiveCache: {}, // key -> archive daily arrays
+  modelCache: {},  // key -> trained per-city model {intercept, coef, metrics, trainInfo, testSet, ridge}
   charts: {},      // chartjs instances keyed by canvas id
 };
 
 function cityKey(c){return `${c.name}|${c.lat.toFixed(2)}|${c.lon.toFixed(2)}`;}
+function cityLabel(c){ return c.admin1 ? `${c.name}, ${c.admin1}` : (c.country ? `${c.name}, ${c.country}` : c.name); }
 function fToC(f){return (f-32)*5/9;}
 function fmtTemp(f){ if(f==null||isNaN(f)) return "--°"; return state.unit==='F' ? Math.round(f)+"°" : Math.round(fToC(f))+"°"; }
 function fmtTempUnit(){return "°"+state.unit;}
@@ -442,37 +431,130 @@ async function fetchArchive(city){
   return j;
 }
 
-/* ---------------- AI model ---------------- */
-function runModel(features){
-  let y = MODEL.intercept;
-  for(const k in MODEL.coef) y += MODEL.coef[k]*(features[k]||0);
+/* ---------------- AI model: trained live, per city ---------------- */
+const MODEL_FEATURES = ["temp_mean_lag1","temp_mean_lag2","humidity_lag1","precip_lag1","temp_std_7d","day_sin","day_cos","hdd","cdd"];
+
+function dayOfYear(d){ const start=new Date(d.getFullYear(),0,0); return Math.floor((d-start)/86400000); }
+
+// Feature vector for day index i (predicts the mean temp of day i+1), shared by training and live prediction
+// so both use exactly the same definition.
+function computeFeaturesAtIndex(dates, tmean, hum, precip, i){
+  if(i<6 || i>=dates.length) return null;
+  if(tmean[i]==null || tmean[i-1]==null || hum[i]==null || precip[i]==null) return null;
+  const window = tmean.slice(i-6, i+1);
+  if(window.some(v=>v==null)) return null;
+  const m7 = mean(window);
+  const variance = window.reduce((s,v)=>s+(v-m7)**2,0)/(window.length-1);
+  const std7 = Math.sqrt(variance);
+  const doy = dayOfYear(dates[i]);
+  return {
+    temp_mean_lag1: tmean[i], temp_mean_lag2: tmean[i-1], humidity_lag1: hum[i], precip_lag1: precip[i],
+    temp_std_7d: std7, day_sin: Math.sin(2*Math.PI*doy/365.25), day_cos: Math.cos(2*Math.PI*doy/365.25),
+    hdd: Math.max(0, 65-tmean[i]), cdd: Math.max(0, tmean[i]-65)
+  };
+}
+
+function runModel(model, features){
+  let y = model.intercept;
+  for(const k in model.coef) y += model.coef[k]*(features[k]||0);
   return y;
 }
-function dayOfYear(d){ const start=new Date(d.getFullYear(),0,0); return Math.floor((d-start)/86400000); }
-function buildLiveFeatures(daily, idxToday){
-  // idxToday: index in daily arrays representing "today"
-  const meanArr = daily.temperature_2m_mean;
-  const humArr = daily.relative_humidity_2m_mean;
-  const precipArr = daily.precipitation_sum;
-  const todayMean = meanArr[idxToday];
-  const yestMean = meanArr[idxToday-1];
-  const humLag1 = humArr[idxToday];
-  const precipLag1 = precipArr[idxToday];
-  const last7 = meanArr.slice(Math.max(0,idxToday-6), idxToday+1).filter(v=>v!=null);
-  const mean7 = last7.reduce((a,b)=>a+b,0)/last7.length;
-  const variance = last7.reduce((a,b)=>a+(b-mean7)**2,0)/(last7.length-1||1);
-  const std7 = Math.sqrt(variance);
-  const tomorrow = new Date(daily.time[idxToday]); tomorrow.setDate(tomorrow.getDate()+1);
-  const doy = dayOfYear(tomorrow);
-  const day_sin = Math.sin(2*Math.PI*doy/365.25);
-  const day_cos = Math.cos(2*Math.PI*doy/365.25);
-  const hdd = Math.max(0, 65-todayMean);
-  const cdd = Math.max(0, todayMean-65);
+
+/* ---- small linear algebra for ordinary least squares (normal equations) ---- */
+function transpose(M){ return M[0].map((_,j)=>M.map(row=>row[j])); }
+function matMul(A,B){
+  const n=A.length, m=A[0].length, p=B[0].length;
+  const out = Array.from({length:n}, ()=>new Array(p).fill(0));
+  for(let i=0;i<n;i++) for(let k=0;k<m;k++){ const a=A[i][k]; if(a===0) continue; for(let j=0;j<p;j++) out[i][j]+=a*B[k][j]; }
+  return out;
+}
+function matInverse(M){
+  const n = M.length;
+  const A = M.map((row,i)=>[...row, ...Array.from({length:n},(_,j)=>i===j?1:0)]);
+  for(let col=0; col<n; col++){
+    let pivotRow = col, maxVal = Math.abs(A[col][col]);
+    for(let r=col+1;r<n;r++){ if(Math.abs(A[r][col])>maxVal){ maxVal=Math.abs(A[r][col]); pivotRow=r; } }
+    if(pivotRow!==col){ const tmp=A[col]; A[col]=A[pivotRow]; A[pivotRow]=tmp; }
+    const pivot = A[col][col];
+    if(Math.abs(pivot) < 1e-10) throw new Error("Not enough varied historical data at this location to fit a stable model yet.");
+    for(let j=0;j<2*n;j++) A[col][j]/=pivot;
+    for(let r=0;r<n;r++){
+      if(r===col) continue;
+      const factor = A[r][col];
+      if(factor===0) continue;
+      for(let j=0;j<2*n;j++) A[r][j]-=factor*A[col][j];
+    }
+  }
+  return A.map(row=>row.slice(n));
+}
+// Ridge-regularized OLS: beta = (X'X + lambda*I)^-1 X'y  (lambda=0 gives plain OLS)
+function olsFit(X, y, lambda){
+  const Xt = transpose(X);
+  const XtX = matMul(Xt, X);
+  for(let i=0;i<XtX.length;i++) XtX[i][i] += (lambda||1e-6);
+  const XtY = matMul(Xt, y.map(v=>[v]));
+  const beta = matMul(matInverse(XtX), XtY);
+  return beta.map(r=>r[0]);
+}
+
+function fmtDateShort(d){ return d.toISOString().slice(0,10); }
+
+// Trains a fresh Linear Regression (and Ridge, for comparison) on this city's own 2-year archive.
+function trainCityModel(archiveDaily, lambda){
+  const dates = archiveDaily.time.map(t=>new Date(t));
+  const tmean = archiveDaily.temperature_2m_mean;
+  const hum = archiveDaily.relative_humidity_2m_mean;
+  const precip = archiveDaily.precipitation_sum;
+  const rows = [];
+  for(let i=6;i<dates.length-1;i++){
+    const feats = computeFeaturesAtIndex(dates, tmean, hum, precip, i);
+    if(!feats) continue;
+    const target = tmean[i+1];
+    if(target==null) continue;
+    rows.push({feats, target, date:dates[i]});
+  }
+  if(rows.length < 40) throw new Error(`Only ${rows.length} usable days of history for this location — need at least 40 to train a model.`);
+
+  const splitIdx = Math.floor(rows.length*0.8);
+  const train = rows.slice(0, splitIdx);
+  const test = rows.slice(splitIdx);
+  const X = train.map(r=>[1, ...MODEL_FEATURES.map(f=>r.feats[f])]);
+  const y = train.map(r=>r.target);
+  const beta = olsFit(X, y, lambda);
+  const intercept = beta[0];
+  const coef = {}; MODEL_FEATURES.forEach((f,idx)=>coef[f]=beta[idx+1]);
+
+  const preds = test.map(r=> intercept + MODEL_FEATURES.reduce((s,f)=>s+coef[f]*r.feats[f], 0));
+  const actuals = test.map(r=>r.target);
+  const errs = preds.map((p,idx)=>actuals[idx]-p);
+  const mae = mean(errs.map(Math.abs));
+  const rmse = Math.sqrt(mean(errs.map(e=>e*e)));
+  const meanA = mean(actuals);
+  const ssTot = actuals.reduce((s,a)=>s+(a-meanA)**2, 0);
+  const ssRes = errs.reduce((s,e)=>s+e*e, 0);
+  const r2 = ssTot>0 ? 1-ssRes/ssTot : null;
+
   return {
-    features:{temp_mean_lag1: todayMean, temp_mean_lag2: yestMean, humidity_lag1: humLag1, precip_lag1: precipLag1,
-      temp_std_7d: std7, day_sin, day_cos, hdd, cdd},
-    tomorrowDate: tomorrow
+    intercept, coef, metrics:{mae, rmse, r2},
+    trainInfo:{
+      rows:train.length, testRows:test.length,
+      start: fmtDateShort(train[0].date), end: fmtDateShort(train[train.length-1].date),
+      split:`80/20 chronological (${train.length} train / ${test.length} test)`
+    },
+    testSet:{ dates: test.map(r=>fmtDateShort(new Date(r.date.getTime()+86400000))), preds, actuals }
   };
+}
+
+async function getOrTrainModel(city){
+  const key = cityKey(city);
+  if(state.modelCache[key]) return state.modelCache[key];
+  const archive = state.archiveCache[key] || await fetchArchive(city);
+  const linear = trainCityModel(archive.daily, 1e-6);
+  let ridge = null;
+  try{ ridge = trainCityModel(archive.daily, 3.0); }catch(e){ /* fall back to linear-only */ }
+  const model = {...linear, ridge};
+  state.modelCache[key] = model;
+  return model;
 }
 
 /* ---------------- helpers: charts ---------------- */
@@ -541,13 +623,16 @@ async function renderToday(){
   const daily = j.daily;
   const idxToday = computeTomorrowIdx(daily);
 
-  // AI model prediction for tomorrow
-  let modelResult = null;
+  // AI model prediction for tomorrow — trained live on THIS city's own history
+  let modelResult = null, modelError = null;
   try{
-    const {features, tomorrowDate} = buildLiveFeatures(daily, idxToday);
-    const pred = runModel(features);
-    modelResult = {pred, tomorrowDate, features};
-  }catch(e){ /* not enough data */ }
+    const model = await getOrTrainModel(city);
+    const dates = daily.time.map(t=>new Date(t));
+    const feats = computeFeaturesAtIndex(dates, daily.temperature_2m_mean, daily.relative_humidity_2m_mean, daily.precipitation_sum, idxToday);
+    if(!feats) throw new Error("Not enough recent daily history returned for this location to compute lag features yet.");
+    const pred = runModel(model, feats);
+    modelResult = {pred, model};
+  }catch(e){ modelError = e.message || String(e); }
 
   const omTomorrow = daily.temperature_2m_mean[idxToday+1];
   const cond = wmoDesc(cur.weather_code), icon = wmoIcon(cur.weather_code);
@@ -578,6 +663,7 @@ async function renderToday(){
 
   if(modelResult){
     const diff = Math.abs(modelResult.pred - omTomorrow).toFixed(1);
+    const m = modelResult.model;
     html += `
     <div class="card">
       <h3>Tomorrow's Mean Temp <span class="tag">AI Model Prediction</span></h3>
@@ -591,10 +677,10 @@ async function renderToday(){
           <div class="l">Open‑Meteo Forecast</div>
         </div>
       </div>
-      <p class="hint">Models differ by ${diff}${fmtTempUnit()}. My model was trained on 2 years of Alpharetta history — test-set MAE ${MODEL.metrics.mae}°F, R² ${MODEL.metrics.r2}. See the <b>Model</b> tab for full methodology, and <b>Accuracy</b> to watch this comparison resolve against tomorrow's actual weather.</p>
+      <p class="hint">Models differ by ${diff}${fmtTempUnit()}. My model was trained fresh on ${m.trainInfo.rows+m.trainInfo.testRows} days of ${cityLabel(city)} history — test-set MAE ${m.metrics.mae.toFixed(2)}°F, R² ${m.metrics.r2!=null?m.metrics.r2.toFixed(3):'--'}. See the <b>Model</b> tab for full methodology, and <b>Accuracy</b> to watch this comparison resolve against tomorrow's actual weather.</p>
     </div>`;
   } else {
-    html += `<div class="card"><h3>AI Model Prediction</h3><p class="hint">Not enough recent daily history returned for this location to compute lag features yet.</p></div>`;
+    html += `<div class="card"><h3>AI Model Prediction</h3><p class="hint">${modelError || "Couldn't train a model for this location yet."}</p></div>`;
   }
   html += `</div>`;
 
@@ -1043,9 +1129,33 @@ function speedToColor(s){
 /* ============================================================
    RENDER: MODEL TAB
    ============================================================ */
-function renderModel(){
-  const feats = Object.entries(MODEL.coef).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1]));
-  let compRows = MODEL.comparison.map((m,i)=>`
+async function renderModel(){
+  const city = state.activeCity;
+  const el = document.getElementById('tab-model');
+  el.innerHTML = `<div class="skel skel-block"></div>`;
+
+  let model;
+  try{ model = await getOrTrainModel(city); updateFooterNote(city, model); }
+  catch(e){
+    el.innerHTML = `<div class="banner warn"><b>Couldn't train a model for ${cityLabel(city)}.</b><br>${e.message||e}<br><button class="ghost-btn" style="margin-top:10px;" onclick="renderModel()">Try again</button></div>`;
+    return;
+  }
+
+  const feats = Object.entries(model.coef).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1]));
+  const cityComparison = [
+    {model:"Linear Regression", mae:model.metrics.mae, rmse:model.metrics.rmse, r2:model.metrics.r2},
+  ];
+  if(model.ridge) cityComparison.push({model:"Ridge Regression", mae:model.ridge.metrics.mae, rmse:model.ridge.metrics.rmse, r2:model.ridge.metrics.r2});
+  cityComparison.sort((a,b)=>a.mae-b.mae);
+  let compRows = cityComparison.map((m,i)=>`
+    <tr>
+      <td><span class="rank-badge ${i===0?'gold':''}">${i+1}</span>${m.model}</td>
+      <td>${m.mae.toFixed(2)}°F</td>
+      <td>${m.rmse.toFixed(2)}°F</td>
+      <td>${m.r2!=null?m.r2.toFixed(3):'--'}</td>
+    </tr>`).join('');
+
+  let refRows = ALPHARETTA_REFERENCE.comparison.map((m,i)=>`
     <tr>
       <td><span class="rank-badge ${i===0?'gold':''}">${i+1}</span>${m.model}</td>
       <td>${m.mae.toFixed(2)}°F</td>
@@ -1053,41 +1163,50 @@ function renderModel(){
       <td>${m.r2.toFixed(3)}</td>
     </tr>`).join('');
 
-  document.getElementById('tab-model').innerHTML = `
+  el.innerHTML = `
     <div class="banner info"><div>🧠</div><div>
-      <b>Next-day mean temperature model</b> — a Linear Regression trained on ${MODEL.trainInfo.rows} days of Alpharetta, GA history
-      (${MODEL.trainInfo.start} → ${MODEL.trainInfo.end}), using a chronological ${MODEL.trainInfo.split}. Six model families were
-      compared; Linear Regression generalized best on the held-out test set. Coefficients below run live in this dashboard —
-      every "AI Model Prediction" you see was computed by this exact formula in your browser.
+      <b>Next-day mean temperature model — ${cityLabel(city)}</b><br>
+      A Linear Regression trained live in your browser on ${model.trainInfo.rows+model.trainInfo.testRows} days of ${cityLabel(city)} history
+      (${model.trainInfo.start} → ${model.trainInfo.end}), using a chronological ${model.trainInfo.split}. Every "AI Model Prediction"
+      you see for ${city.name} was computed by this exact formula — retrained from scratch on ${city.name}'s own weather history, not reused
+      from another city.
     </div></div>
 
     <div class="grid g4">
-      <div class="card metric-box"><div class="v">${MODEL.metrics.mae}°F</div><div class="l">Test MAE</div></div>
-      <div class="card metric-box"><div class="v">${MODEL.metrics.rmse}°F</div><div class="l">Test RMSE</div></div>
-      <div class="card metric-box"><div class="v">${MODEL.metrics.r2}</div><div class="l">Test R²</div></div>
-      <div class="card metric-box"><div class="v">${MODEL.trainInfo.rows}</div><div class="l">Training Rows</div></div>
+      <div class="card metric-box"><div class="v">${model.metrics.mae.toFixed(2)}°F</div><div class="l">Test MAE</div></div>
+      <div class="card metric-box"><div class="v">${model.metrics.rmse.toFixed(2)}°F</div><div class="l">Test RMSE</div></div>
+      <div class="card metric-box"><div class="v">${model.metrics.r2!=null?model.metrics.r2.toFixed(3):'--'}</div><div class="l">Test R²</div></div>
+      <div class="card metric-box"><div class="v">${model.trainInfo.rows}</div><div class="l">Training Rows</div></div>
     </div>
 
     <div class="grid g2" style="margin-top:16px;">
       <div class="card">
-        <h3>Model Coefficients (sorted by influence)</h3>
+        <h3>Model Coefficients (sorted by influence) <span class="tag">${city.name}</span></h3>
         <div class="chart-wrap"><canvas id="coefChart"></canvas></div>
-        <p class="hint">Intercept: ${MODEL.intercept}°F. Negative day_cos / day_sin coefficients capture seasonality; hdd/cdd (heating/cooling degree days) carry most of the temperature-regime signal.</p>
+        <p class="hint">Intercept: ${model.intercept.toFixed(3)}°F. These coefficients are unique to ${city.name}'s climate — a different city will
+        weight seasonality, humidity, and lag terms differently.</p>
       </div>
       <div class="card">
-        <h3>Model Family Comparison (test set)</h3>
+        <h3>Linear vs. Ridge — ${city.name} (live, this city's test set)</h3>
         <table><thead><tr><th>Model</th><th>MAE</th><th>RMSE</th><th>R²</th></tr></thead><tbody>${compRows}</tbody></table>
         <div class="chart-wrap" style="margin-top:14px;"><canvas id="modelCompareChart"></canvas></div>
+        <p class="hint">Both are trained live on ${city.name}'s own data right now. Lasso/SVR/Random Forest/Gradient Boosting aren't
+        practical to retrain per city entirely in-browser — see the original offline research below for how those compared on Alpharetta.</p>
       </div>
     </div>
 
-    <div class="section-title">Live Predicted vs. Actual (last 90 days, this city)</div>
-    <div class="section-sub">Recreates the notebook's predicted-vs-actual check using the same formula, run against ${state.activeCity.name}'s recent archive — not the original Alpharetta test set, but the same model and math.</div>
+    <div class="section-title">Held-Out Test Set: Predicted vs. Actual</div>
+    <div class="section-sub">These are the ${model.trainInfo.testRows} most recent days in ${city.name}'s history, withheld from training — the model never saw these when it fit its coefficients.</div>
     <div class="grid g2">
       <div class="card"><h3>Predicted vs. Actual Next-Day Mean Temp</h3><div class="chart-wrap tall"><canvas id="predActualChart"></canvas></div></div>
       <div class="card"><h3>Residuals (Actual − Predicted)</h3><div class="chart-wrap tall"><canvas id="residChart"></canvas></div></div>
     </div>
-    <div class="grid g4" style="margin-top:16px;" id="liveMetricBoxes"></div>
+
+    <div class="section-title">Original Offline Research (Alpharetta, GA)</div>
+    <div class="section-sub">Six model families compared on 724 days of Alpharetta history in the original notebook — kept here as reference since retraining all six per city isn't feasible client-side.</div>
+    <div class="card">
+      <table><thead><tr><th>Model</th><th>MAE</th><th>RMSE</th><th>R²</th></tr></thead><tbody>${refRows}</tbody></table>
+    </div>
   `;
 
   mkChart('coefChart', {
@@ -1097,57 +1216,21 @@ function renderModel(){
   });
   mkChart('modelCompareChart', {
     type:'bar',
-    data:{labels:MODEL.comparison.map(m=>m.model), datasets:[
-      {label:'MAE', data:MODEL.comparison.map(m=>m.mae), backgroundColor:'#2563EB'},
-      {label:'RMSE', data:MODEL.comparison.map(m=>m.rmse), backgroundColor:'#EF4444'}
-    ]}, options: baseChartOpts({scales:{x:{ticks:{color:chartColors().text, maxRotation:40, minRotation:20}}, y:{ticks:{color:chartColors().text}}}})
+    data:{labels:cityComparison.map(m=>m.model), datasets:[
+      {label:'MAE', data:cityComparison.map(m=>m.mae), backgroundColor:'#2563EB'},
+      {label:'RMSE', data:cityComparison.map(m=>m.rmse), backgroundColor:'#EF4444'}
+    ]}, options: baseChartOpts()
   });
-
-  renderLivePredActual();
-}
-
-async function renderLivePredActual(){
-  const city = state.activeCity;
-  try{
-    if(!state.archiveCache[cityKey(city)]) await fetchArchive(city);
-    const daily = state.archiveCache[cityKey(city)].daily;
-    const n = daily.time.length;
-    const start = Math.max(9, n-91);
-    const preds = [], actuals = [], labels = [];
-    for(let i=start;i<n-1;i++){
-      const {features} = buildLiveFeatures(daily, i);
-      const p = runModel(features);
-      const actual = daily.temperature_2m_mean[i+1];
-      if(actual==null) continue;
-      preds.push(p); actuals.push(actual); labels.push(new Date(daily.time[i+1]).toLocaleDateString([], {month:'short', day:'numeric'}));
-    }
-    const errs = preds.map((p,i)=>actuals[i]-p);
-    const mae = mean(errs.map(Math.abs));
-    const rmse = Math.sqrt(mean(errs.map(e=>e*e)));
-    const ssRes = errs.reduce((s,e)=>s+e*e,0);
-    const meanA = mean(actuals);
-    const ssTot = actuals.reduce((s,a)=>s+(a-meanA)**2,0);
-    const r2 = 1-ssRes/ssTot;
-
-    mkChart('predActualChart', {
-      type:'line', data:{labels, datasets:[
-        {label:'Actual', data:actuals, borderColor:'#111', borderWidth:2.5, pointRadius:0},
-        {label:'Predicted', data:preds, borderColor:'#2563EB', borderWidth:2, borderDash:[4,3], pointRadius:0}
-      ]}, options: baseChartOpts({scales:{x:{ticks:{display:false}, grid:{display:false}}, y:{ticks:{color:chartColors().text}}}})
-    });
-    mkChart('residChart', {
-      type:'scatter', data:{datasets:[{data:errs.map((e,i)=>({x:i,y:e})), backgroundColor:'#8B5CF6', pointRadius:4}]},
-      options: baseChartOpts({plugins:{legend:{display:false}}, scales:{x:{ticks:{display:false}, grid:{display:false}}, y:{ticks:{color:chartColors().text}}}})
-    });
-    document.getElementById('liveMetricBoxes').innerHTML = `
-      <div class="card metric-box"><div class="v">${mae.toFixed(2)}°F</div><div class="l">Live MAE</div></div>
-      <div class="card metric-box"><div class="v">${rmse.toFixed(2)}°F</div><div class="l">Live RMSE</div></div>
-      <div class="card metric-box"><div class="v">${r2.toFixed(3)}</div><div class="l">Live R²</div></div>
-      <div class="card metric-box"><div class="v">${preds.length}</div><div class="l">Days Evaluated</div></div>
-    `;
-  }catch(e){
-    document.getElementById('liveMetricBoxes').innerHTML = `<p class="hint">Couldn't compute live evaluation for this city yet.</p>`;
-  }
+  mkChart('predActualChart', {
+    type:'line', data:{labels:model.testSet.dates, datasets:[
+      {label:'Actual', data:model.testSet.actuals, borderColor:'#111', borderWidth:2.5, pointRadius:0},
+      {label:'Predicted', data:model.testSet.preds, borderColor:'#2563EB', borderWidth:2, borderDash:[4,3], pointRadius:0}
+    ]}, options: baseChartOpts({scales:{x:{ticks:{display:false}, grid:{display:false}}, y:{ticks:{color:chartColors().text}}}})
+  });
+  mkChart('residChart', {
+    type:'scatter', data:{datasets:[{data:model.testSet.actuals.map((a,i)=>({x:i, y:a-model.testSet.preds[i]})), backgroundColor:'#8B5CF6', pointRadius:4}]},
+    options: baseChartOpts({plugins:{legend:{display:false}}, scales:{x:{ticks:{display:false}, grid:{display:false}}, y:{ticks:{color:chartColors().text}}}})
+  });
 }
 
 /* ============================================================
@@ -1286,6 +1369,18 @@ function renderCityTabs(){
   el.querySelectorAll('.city-pill').forEach(p=>p.onclick = ()=>selectCity(JSON.parse(p.dataset.city)));
 }
 
+function updateFooterNote(city, model){
+  const el = document.getElementById('footerNote');
+  if(!el) return;
+  if(model){
+    el.innerHTML = `Live data from Open‑Meteo (open‑source weather API, no key required). AI predictions are computed in your browser<br>
+    from a linear regression trained fresh on ${model.trainInfo.rows+model.trainInfo.testRows} days of ${cityLabel(city)} history (${model.trainInfo.start} → ${model.trainInfo.end}) — see the Model tab for methodology.`;
+  } else {
+    el.innerHTML = `Live data from Open‑Meteo (open‑source weather API, no key required). AI predictions are computed in your browser<br>
+    from a linear regression trained fresh on 2 years of ${cityLabel(city)}'s own history — see the Model tab for methodology.`;
+  }
+}
+
 function selectCity(c){
   state.activeCity = c;
   if(!state.recent.some(r=>r.name===c.name && r.lat===c.lat)) state.recent.unshift(c);
@@ -1293,6 +1388,7 @@ function selectCity(c){
   if(!state.cities.some(x=>x.name===c.name && x.lat===c.lat)) state.cities.push(c);
   savePrefs();
   renderCityTabs();
+  updateFooterNote(c, state.modelCache[cityKey(c)]);
   renderActiveTab();
 }
 
@@ -1324,6 +1420,7 @@ async function init(){
   if(!state.recent.length) state.recent = [];
   if(!state.cities.some(c=>c.name===state.activeCity?.name)) state.activeCity = state.cities[0];
   renderCityTabs();
+  updateFooterNote(state.activeCity, state.modelCache[cityKey(state.activeCity)]);
   renderActiveTab();
 
   document.getElementById('themeBtn').onclick = ()=>{ state.theme = state.theme==='dark'?'light':'dark'; applyTheme(); savePrefs(); renderActiveTab(); };

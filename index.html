@@ -218,6 +218,9 @@ tr:last-child td{border:none;}
       <input class="city-search" id="citySearchInput" placeholder="Search any city worldwide…" autocomplete="off">
       <div class="search-results" id="searchResults" style="display:none;"></div>
     </div>
+    <div class="icon-btn" id="locateBtn" title="Use my location">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+    </div>
     <div class="topbar-spacer"></div>
     <div class="updated-text" id="updatedText">—</div>
     <div class="icon-btn" id="refreshBtn" title="Refresh">
@@ -360,6 +363,48 @@ async function geocodeSearch(q){
   return (j.results||[]).map(r=>({name:r.name, country:r.country, admin1:r.admin1, lat:r.latitude, lon:r.longitude, tz:r.timezone}));
 }
 
+// Reverse-geocode lat/lon -> city name using BigDataCloud's free client-side API (no key, CORS-enabled)
+async function reverseGeocode(lat, lon){
+  const url = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`;
+  const res = await fetch(url);
+  if(!res.ok) throw new Error("Reverse geocoding failed");
+  const j = await res.json();
+  const name = j.city || j.locality || j.principalSubdivision || "My Location";
+  return {name, country:j.countryName, admin1:j.principalSubdivision, lat, lon, tz:null};
+}
+
+function useMyLocation(){
+  const btn = document.getElementById('locateBtn');
+  if(!navigator.geolocation){
+    alert("This browser doesn't support geolocation.");
+    return;
+  }
+  btn.style.opacity = '0.5';
+  navigator.geolocation.getCurrentPosition(
+    async (pos)=>{
+      try{
+        const {latitude, longitude} = pos.coords;
+        const city = await reverseGeocode(latitude, longitude);
+        selectCity(city);
+      }catch(e){
+        // Reverse geocoding failed — still use the raw coordinates
+        selectCity({name:"My Location", country:"", admin1:"", lat:pos.coords.latitude, lon:pos.coords.longitude, tz:null});
+      }finally{
+        btn.style.opacity = '1';
+      }
+    },
+    (err)=>{
+      btn.style.opacity = '1';
+      let msg = "Couldn't get your location.";
+      if(err.code === 1) msg = "Location access was denied. You can allow it in your browser's site settings, or just search for your city instead.";
+      else if(err.code === 2) msg = "Your location is currently unavailable.";
+      else if(err.code === 3) msg = "Location request timed out.";
+      alert(msg);
+    },
+    {enableHighAccuracy:false, timeout:10000, maximumAge:600000}
+  );
+}
+
 async function fetchLive(city){
   const key = cityKey(city);
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}` +
@@ -377,7 +422,8 @@ async function fetchLive(city){
 async function fetchArchive(city){
   const key = cityKey(city);
   if(state.archiveCache[key]) return state.archiveCache[key];
-  const end = new Date(); end.setDate(end.getDate()-2);
+  // ERA5 reanalysis typically lags ~5 days behind real-time; back off further to avoid a run of nulls
+  const end = new Date(); end.setDate(end.getDate()-6);
   const start = new Date(end); start.setFullYear(start.getFullYear()-2);
   const fmt = d=>d.toISOString().slice(0,10);
   const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${city.lat}&longitude=${city.lon}` +
@@ -385,8 +431,13 @@ async function fetchArchive(city){
     `&daily=temperature_2m_max,temperature_2m_min,temperature_2m_mean,relative_humidity_2m_mean,precipitation_sum,wind_speed_10m_max,wind_direction_10m_dominant` +
     `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto`;
   const res = await fetch(url);
-  if(!res.ok) throw new Error("archive fetch failed");
+  if(!res.ok){
+    let reason = `HTTP ${res.status}`;
+    try{ const errJson = await res.json(); if(errJson && errJson.reason) reason = errJson.reason; }catch(e){}
+    throw new Error(reason);
+  }
   const j = await res.json();
+  if(!j.daily || !j.daily.time || !j.daily.time.length) throw new Error("Archive API returned no daily data for this location.");
   state.archiveCache[key] = j;
   return j;
 }
@@ -433,6 +484,18 @@ function chartColors(){
   };
 }
 function destroyChart(id){ if(state.charts[id]){ state.charts[id].destroy(); delete state.charts[id]; } }
+function mkChart(id, config){
+  const el = document.getElementById(id);
+  if(!el){ console.warn('mkChart: canvas not found', id); return; }
+  try{
+    destroyChart(id);
+    state.charts[id] = new Chart(el, config);
+  }catch(e){
+    console.error('Chart failed to render:', id, e);
+    const wrap = el.closest('.chart-wrap') || el.parentElement;
+    if(wrap) wrap.innerHTML = `<p class="hint" style="color:var(--bad);">This chart (${id}) failed to render: ${e.message||e}</p>`;
+  }
+}
 function baseChartOpts(extra){
   const c = chartColors();
   return Object.assign({
@@ -640,8 +703,7 @@ async function renderForecast(){
   document.getElementById('tab-forecast').innerHTML = html;
 
   const labels = daily.time.slice(idxToday, idxToday+8).map(t=>new Date(t).toLocaleDateString([], {weekday:'short'}));
-  destroyChart('forecastChart');
-  state.charts['forecastChart'] = new Chart(document.getElementById('forecastChart'), {
+  mkChart('forecastChart', {
     type:'line',
     data:{labels, datasets:[
       {label:'High', data:daily.temperature_2m_max.slice(idxToday,idxToday+8), borderColor:'#ff453a', backgroundColor:'rgba(255,69,58,0.08)', fill:'+1', tension:.35, pointRadius:2},
@@ -650,8 +712,7 @@ async function renderForecast(){
     ]},
     options: baseChartOpts()
   });
-  destroyChart('precipForecastChart');
-  state.charts['precipForecastChart'] = new Chart(document.getElementById('precipForecastChart'), {
+  mkChart('precipForecastChart', {
     type:'bar',
     data:{labels, datasets:[
       {label:'Precip (in)', data:daily.precipitation_sum.slice(idxToday,idxToday+8), backgroundColor:'#5f9ccf', yAxisID:'y'},
@@ -659,12 +720,11 @@ async function renderForecast(){
     ]},
     options: baseChartOpts({scales:{ y:{position:'left', ticks:{color:chartColors().text}}, y1:{position:'right', grid:{drawOnChartArea:false}, ticks:{color:chartColors().text}}, x:{ticks:{color:chartColors().text}} }})
   });
-  destroyChart('uvWindChart');
-  state.charts['uvWindChart'] = new Chart(document.getElementById('uvWindChart'), {
+  mkChart('uvWindChart', {
     type:'bar',
     data:{labels, datasets:[
-      {label:'UV Index', data:daily.uv_index_max.slice(idxToday,idxToday+8), backgroundColor:'#ff9f0a'},
-      {label:'Wind Max (mph)', data:daily.wind_speed_10m_max.slice(idxToday,idxToday+8), backgroundColor:'#8B5CF6'}
+      {label:'UV Index', data:daily.uv_index_max.slice(idxToday,idxToday+8), backgroundColor:'#ff9f0a', borderRadius:6},
+      {label:'Wind Max (mph)', data:daily.wind_speed_10m_max.slice(idxToday,idxToday+8), backgroundColor:'#0a84ff', borderRadius:6}
     ]},
     options: baseChartOpts()
   });
@@ -687,12 +747,24 @@ async function renderAnalytics(){
     document.getElementById('loadAnalyticsBtn').onclick = async ()=>{
       document.getElementById('loadAnalyticsBtn').disabled = true;
       document.getElementById('loadAnalyticsBtn').textContent = "Loading…";
-      try{ await fetchArchive(city); renderAnalyticsBody(); }
-      catch(e){ el.innerHTML = `<div class="banner warn">Couldn't load archive data. Try again.</div>`; }
+      try{ await fetchArchive(city); }
+      catch(e){
+        el.innerHTML = `<div class="banner warn"><b>Couldn't load historical data.</b><br>${e.message||e}<br><button class="ghost-btn" style="margin-top:10px;" onclick="renderAnalytics()">Try again</button></div>`;
+        return;
+      }
+      try{ renderAnalyticsBody(); }
+      catch(e){
+        console.error(e);
+        el.innerHTML = `<div class="banner warn"><b>Data loaded, but a chart failed to render.</b><br>${e.message||e}<br><button class="ghost-btn" style="margin-top:10px;" onclick="renderAnalyticsBody()">Try again</button></div>`;
+      }
     };
     return;
   }
-  renderAnalyticsBody();
+  try{ renderAnalyticsBody(); }
+  catch(e){
+    console.error(e);
+    el.innerHTML = `<div class="banner warn"><b>Something went wrong rendering analytics.</b><br>${e.message||e}<br><button class="ghost-btn" style="margin-top:10px;" onclick="renderAnalyticsBody()">Try again</button></div>`;
+  }
 }
 
 function mean(a){return a.reduce((x,y)=>x+y,0)/a.length;}
@@ -885,33 +957,28 @@ function renderAnalyticsBody(){
 
   const labelsAll = dates.map(d=>d.toLocaleDateString([], {month:'short', day:'numeric'}));
 
-  destroyChart('tempTrendChart');
-  state.charts['tempTrendChart'] = new Chart(document.getElementById('tempTrendChart'), {
+  mkChart('tempTrendChart', {
     type:'line', data:{labels:labelsAll, datasets:[
       {label:'High', data:tmax, borderColor:'rgba(252,96,96,0.35)', pointRadius:0, borderWidth:1},
       {label:'Low', data:tmin, borderColor:'rgba(75,130,250,0.35)', pointRadius:0, borderWidth:1},
       {label:'7-Day Avg', data:tmean7, borderColor:'#111', borderWidth:2, pointRadius:0},
     ]}, options: baseChartOpts()
   });
-  destroyChart('humTrendChart');
-  state.charts['humTrendChart'] = new Chart(document.getElementById('humTrendChart'), {
+  mkChart('humTrendChart', {
     type:'line', data:{labels:labelsAll, datasets:[
       {label:'Daily', data:hum, borderColor:'rgba(6,182,212,0.3)', pointRadius:0, borderWidth:1},
       {label:'7-Day Avg', data:hum7, borderColor:'#0E7490', borderWidth:2.5, pointRadius:0},
     ]}, options: baseChartOpts()
   });
-  destroyChart('precipDailyChart');
-  state.charts['precipDailyChart'] = new Chart(document.getElementById('precipDailyChart'), {
+  mkChart('precipDailyChart', {
     type:'bar', data:{labels:labelsAll, datasets:[{label:'Precip (in)', data:precip, backgroundColor:'#5f9ccf'}]},
     options: baseChartOpts({scales:{x:{ticks:{display:false}, grid:{display:false}}, y:{ticks:{color:chartColors().text}}}})
   });
-  destroyChart('precipMonthlyChart');
-  state.charts['precipMonthlyChart'] = new Chart(document.getElementById('precipMonthlyChart'), {
+  mkChart('precipMonthlyChart', {
     type:'bar', data:{labels:monthLabels, datasets:[{label:'Monthly Total (in)', data:monthVals, backgroundColor:'#2563EB'}]},
     options: baseChartOpts({scales:{x:{ticks:{color:chartColors().text, maxRotation:60, minRotation:60}}, y:{ticks:{color:chartColors().text}}}})
   });
-  destroyChart('boxChart');
-  state.charts['boxChart'] = new Chart(document.getElementById('boxChart'), {
+  mkChart('boxChart', {
     type:'bar',
     data:{labels:monthNames, datasets:[
       {label:'Min–Max Range', data:boxStats.map(b=>[b.min,b.max]), backgroundColor:'rgba(37,99,235,0.15)', borderSkipped:false},
@@ -919,50 +986,43 @@ function renderAnalyticsBody(){
       {label:'Median', data:boxStats.map(b=>b.med), type:'line', borderColor:'#111', pointBackgroundColor:'#111', pointRadius:4, showLine:false},
     ]}, options: baseChartOpts()
   });
-  destroyChart('histChart');
-  state.charts['histChart'] = new Chart(document.getElementById('histChart'), {
+  mkChart('histChart', {
     type:'bar', data:{labels:bins.map(b=>b+'–'+(b+5)), datasets:[{label:'Days', data:histCounts, backgroundColor:'#76ab63'}]},
     options: baseChartOpts({scales:{x:{ticks:{color:chartColors().text, maxRotation:60, minRotation:60}}, y:{ticks:{color:chartColors().text}}}})
   });
-  destroyChart('scatterChart');
-  state.charts['scatterChart'] = new Chart(document.getElementById('scatterChart'), {
+  mkChart('scatterChart', {
     type:'scatter', data:{datasets:[{label:'Days', data:cleanIdx.map(i=>({x:tmean[i], y:hum[i]})), backgroundColor:'rgba(37,99,235,0.5)', pointRadius:3}]},
     options: baseChartOpts({scales:{x:{title:{display:true,text:'Mean Temp (°F)', color:chartColors().text}, ticks:{color:chartColors().text}}, y:{title:{display:true,text:'Humidity (%)', color:chartColors().text}, ticks:{color:chartColors().text}}}})
   });
   destroyChart('yoyChart');
   const palette = ['#2563EB','#10B981','#F59E0B','#EF4444','#8B5CF6'];
-  state.charts['yoyChart'] = new Chart(document.getElementById('yoyChart'), {
+  mkChart('yoyChart', {
     type:'line',
     data:{labels: yoySeries[0]?.x || [], datasets: yoySeries.map((s,i)=>({label:String(s.year), data:s.y, borderColor:palette[i%palette.length], pointRadius:0, borderWidth:2}))},
     options: baseChartOpts({scales:{x:{ticks:{display:false}, grid:{display:false}}, y:{ticks:{color:chartColors().text}}}})
   });
-  destroyChart('windRoseChart');
-  state.charts['windRoseChart'] = new Chart(document.getElementById('windRoseChart'), {
+  mkChart('windRoseChart', {
     type:'polarArea',
     data:{labels:compassLabels, datasets:[{data:sectorCounts, backgroundColor:sectorAvgSpeed.map(s=>speedToColor(s))}]},
     options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}, tooltip:{callbacks:{label:(ctx)=>`${ctx.label}: ${ctx.raw} days, avg ${sectorAvgSpeed[ctx.dataIndex].toFixed(1)} mph`}}}, scales:{r:{ticks:{display:false}, grid:{color:chartColors().grid}}}}
   });
-  destroyChart('acfChart');
-  state.charts['acfChart'] = new Chart(document.getElementById('acfChart'), {
+  mkChart('acfChart', {
     type:'bar',
     data:{labels: acf.map((_,i)=>i), datasets:[{label:'ACF', data:acf, backgroundColor:'#3b75f5'}]},
     options: baseChartOpts({plugins:{legend:{display:false}, annotation:{}}, scales:{x:{ticks:{color:chartColors().text}}, y:{ticks:{color:chartColors().text}}}})
   });
-  destroyChart('degreeDaysChart');
-  state.charts['degreeDaysChart'] = new Chart(document.getElementById('degreeDaysChart'), {
+  mkChart('degreeDaysChart', {
     type:'line',
     data:{labels:ddLabels, datasets:[
       {label:'Heating Degree Days', data:hddArr, borderColor:'#EF4444', pointRadius:0, borderWidth:2.5},
       {label:'Cooling Degree Days', data:cddArr, borderColor:'#3B82F6', pointRadius:0, borderWidth:2.5},
     ]}, options: baseChartOpts({scales:{x:{ticks:{display:false}, grid:{display:false}}, y:{ticks:{color:chartColors().text}}}})
   });
-  destroyChart('extremeChart');
-  state.charts['extremeChart'] = new Chart(document.getElementById('extremeChart'), {
+  mkChart('extremeChart', {
     type:'bar', data:{labels:Object.keys(extreme), datasets:[{data:Object.values(extreme), backgroundColor:['#EF4444','#64d2ff','#5f9ccf','#0a3d91']}]},
     options: baseChartOpts({plugins:{legend:{display:false}}, scales:{x:{ticks:{color:chartColors().text}}, y:{ticks:{color:chartColors().text}}}})
   });
-  destroyChart('featCorrChart');
-  state.charts['featCorrChart'] = new Chart(document.getElementById('featCorrChart'), {
+  mkChart('featCorrChart', {
     type:'bar',
     data:{labels:featCorr.map(f=>f.name), datasets:[{data:featCorr.map(f=>f.c), backgroundColor:featCorr.map(f=>f.c<0?'#EF4444':'#2563EB')}]},
     options: baseChartOpts({indexAxis:'y', plugins:{legend:{display:false}}})
@@ -1029,14 +1089,12 @@ function renderModel(){
     <div class="grid g4" style="margin-top:16px;" id="liveMetricBoxes"></div>
   `;
 
-  destroyChart('coefChart');
-  state.charts['coefChart'] = new Chart(document.getElementById('coefChart'), {
+  mkChart('coefChart', {
     type:'bar',
     data:{labels:feats.map(f=>f[0]), datasets:[{data:feats.map(f=>f[1]), backgroundColor:feats.map(f=>f[1]<0?'#EF4444':'#2563EB')}]},
     options: baseChartOpts({indexAxis:'y', plugins:{legend:{display:false}}})
   });
-  destroyChart('modelCompareChart');
-  state.charts['modelCompareChart'] = new Chart(document.getElementById('modelCompareChart'), {
+  mkChart('modelCompareChart', {
     type:'bar',
     data:{labels:MODEL.comparison.map(m=>m.model), datasets:[
       {label:'MAE', data:MODEL.comparison.map(m=>m.mae), backgroundColor:'#2563EB'},
@@ -1070,15 +1128,13 @@ async function renderLivePredActual(){
     const ssTot = actuals.reduce((s,a)=>s+(a-meanA)**2,0);
     const r2 = 1-ssRes/ssTot;
 
-    destroyChart('predActualChart');
-    state.charts['predActualChart'] = new Chart(document.getElementById('predActualChart'), {
+    mkChart('predActualChart', {
       type:'line', data:{labels, datasets:[
         {label:'Actual', data:actuals, borderColor:'#111', borderWidth:2.5, pointRadius:0},
         {label:'Predicted', data:preds, borderColor:'#2563EB', borderWidth:2, borderDash:[4,3], pointRadius:0}
       ]}, options: baseChartOpts({scales:{x:{ticks:{display:false}, grid:{display:false}}, y:{ticks:{color:chartColors().text}}}})
     });
-    destroyChart('residChart');
-    state.charts['residChart'] = new Chart(document.getElementById('residChart'), {
+    mkChart('residChart', {
       type:'scatter', data:{datasets:[{data:errs.map((e,i)=>({x:i,y:e})), backgroundColor:'#8B5CF6', pointRadius:4}]},
       options: baseChartOpts({plugins:{legend:{display:false}}, scales:{x:{ticks:{display:false}, grid:{display:false}}, y:{ticks:{color:chartColors().text}}}})
     });
@@ -1182,8 +1238,7 @@ async function renderAccuracy(){
 
   el.innerHTML = html;
   if(resolved.length){
-    destroyChart('accuracyChart');
-    state.charts['accuracyChart'] = new Chart(document.getElementById('accuracyChart'), {
+    mkChart('accuracyChart', {
       type:'line',
       data:{labels:resolved.map(r=>r.targetStr), datasets:[
         {label:'AI Error', data:resolved.map(r=>Math.abs(r.actual-r.aiPred)), borderColor:'#0a84ff', tension:.3},
@@ -1273,6 +1328,7 @@ async function init(){
   document.getElementById('themeBtn').onclick = ()=>{ state.theme = state.theme==='dark'?'light':'dark'; applyTheme(); savePrefs(); renderActiveTab(); };
   document.getElementById('unitBtn').onclick = ()=>{ state.unit = state.unit==='F'?'C':'F'; document.getElementById('unitBtn').textContent='°'+state.unit; savePrefs(); renderActiveTab(); };
   document.getElementById('refreshBtn').onclick = ()=>{ state.liveCache={}; renderActiveTab(); };
+  document.getElementById('locateBtn').onclick = useMyLocation;
 
   document.querySelectorAll('.nav-tab').forEach(t=>{
     t.onclick = ()=>{

@@ -1,0 +1,1300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weather Intelligence</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<style>
+:root{
+  --bg:#f2f3f7; --bg2:#e8eaf0; --card:rgba(255,255,255,0.72); --card-solid:#ffffff;
+  --text:#1c1c1e; --text2:#6e6e73; --text3:#98989d; --border:rgba(0,0,0,0.06);
+  --accent:#0a84ff; --accent2:#5e5ce6; --warm:#ff9f0a; --hot:#ff453a; --cool:#64d2ff;
+  --good:#30d158; --bad:#ff453a; --shadow:0 8px 30px rgba(0,0,0,0.06);
+  --blur:saturate(180%) blur(20px);
+  --radius:22px;
+}
+.dark{
+  --bg:#000000; --bg2:#0b0b0d; --card:rgba(28,28,30,0.72); --card-solid:#1c1c1e;
+  --text:#f5f5f7; --text2:#98989d; --text3:#6e6e73; --border:rgba(255,255,255,0.08);
+  --shadow:0 8px 30px rgba(0,0,0,0.4);
+}
+*{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+html,body{margin:0;padding:0;}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Inter",system-ui,sans-serif;
+  background:linear-gradient(180deg,var(--bg2),var(--bg) 300px);
+  color:var(--text); min-height:100vh; transition:background .4s ease, color .4s ease;
+  letter-spacing:-0.01em;
+}
+::selection{background:var(--accent); color:#fff;}
+button{font-family:inherit;}
+a{color:inherit;}
+.app{max-width:1200px; margin:0 auto; padding:16px 20px 80px;}
+
+/* ---------- Top bar ---------- */
+.topbar{
+  position:sticky; top:0; z-index:50; display:flex; align-items:center; gap:14px;
+  padding:14px 20px; margin:0 -20px 18px; backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+  background:var(--card); border-bottom:1px solid var(--border);
+}
+.brand{display:flex; align-items:center; gap:10px; font-weight:700; font-size:17px; white-space:nowrap;}
+.brand .dot{width:9px;height:9px;border-radius:50%;background:var(--good); box-shadow:0 0 0 4px rgba(48,209,88,0.15);}
+.brand .dot.stale{background:var(--warm); box-shadow:0 0 0 4px rgba(255,159,10,0.15);}
+.city-search-wrap{position:relative; flex:1; max-width:340px;}
+.city-search{
+  width:100%; padding:9px 14px 9px 34px; border-radius:12px; border:1px solid var(--border);
+  background:var(--bg2); color:var(--text); font-size:14px; outline:none; transition:.2s;
+}
+.city-search:focus{background:var(--card-solid); box-shadow:0 0 0 3px rgba(10,132,255,0.15);}
+.city-search-wrap svg{position:absolute; left:11px; top:50%; transform:translateY(-50%); opacity:.5; pointer-events:none;}
+.search-results{
+  position:absolute; top:calc(100% + 6px); left:0; right:0; background:var(--card-solid); border:1px solid var(--border);
+  border-radius:14px; box-shadow:var(--shadow); overflow:hidden; z-index:60; max-height:280px; overflow-y:auto;
+}
+.search-result-item{padding:10px 14px; cursor:pointer; font-size:14px; display:flex; justify-content:space-between; gap:8px;}
+.search-result-item:hover{background:var(--bg2);}
+.search-result-item span.sub{color:var(--text3); font-size:12px;}
+.topbar-spacer{flex:1;}
+.icon-btn{
+  width:36px; height:36px; border-radius:50%; border:1px solid var(--border); background:var(--bg2);
+  display:flex; align-items:center; justify-content:center; cursor:pointer; transition:transform .15s ease, background .2s;
+  flex-shrink:0;
+}
+.icon-btn:active{transform:scale(0.92);}
+.icon-btn:hover{background:var(--card-solid);}
+.updated-text{font-size:12px; color:var(--text3); white-space:nowrap;}
+
+/* ---------- City pills ---------- */
+.city-tabs{display:flex; gap:8px; overflow-x:auto; padding:2px 2px 14px; margin-bottom:6px; scrollbar-width:none;}
+.city-tabs::-webkit-scrollbar{display:none;}
+.city-pill{
+  flex-shrink:0; display:flex; align-items:center; gap:6px; padding:8px 14px; border-radius:999px;
+  background:var(--card); border:1px solid var(--border); cursor:pointer; font-size:13.5px; font-weight:600;
+  color:var(--text2); transition:.18s ease; backdrop-filter:var(--blur);
+}
+.city-pill:active{transform:scale(0.96);}
+.city-pill.active{background:var(--accent); color:#fff; border-color:transparent;}
+.city-pill .pin{opacity:.6; font-size:11px;}
+
+/* ---------- Nav tabs ---------- */
+.nav-tabs{display:flex; gap:4px; background:var(--card); border:1px solid var(--border); border-radius:14px; padding:4px; margin-bottom:22px; overflow-x:auto; backdrop-filter:var(--blur);}
+.nav-tab{
+  flex:1; text-align:center; padding:9px 10px; border-radius:11px; cursor:pointer; font-size:13.5px; font-weight:600;
+  color:var(--text2); white-space:nowrap; transition:.18s ease; user-select:none;
+}
+.nav-tab.active{background:var(--accent); color:#fff; box-shadow:0 4px 12px rgba(10,132,255,0.3);}
+.nav-tab:not(.active):hover{background:var(--bg2);}
+
+/* ---------- Cards / grid ---------- */
+.grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:16px;}
+.grid.g2{grid-template-columns:repeat(auto-fit,minmax(340px,1fr));}
+.grid.g4{grid-template-columns:repeat(auto-fit,minmax(140px,1fr));}
+.card{
+  background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:20px;
+  box-shadow:var(--shadow); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+  animation:rise .5s cubic-bezier(.2,.8,.2,1) both;
+}
+@keyframes rise{from{opacity:0; transform:translateY(10px);} to{opacity:1; transform:translateY(0);}}
+.card h3{margin:0 0 14px; font-size:15px; font-weight:700; display:flex; align-items:center; gap:8px;}
+.card h3 .tag{font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; padding:3px 8px; border-radius:6px; background:rgba(10,132,255,0.12); color:var(--accent);}
+.card h3 .tag.live{background:rgba(48,209,88,0.14); color:var(--good);}
+.card p.hint{color:var(--text3); font-size:12.5px; margin:6px 0 0; line-height:1.5;}
+.section-title{font-size:22px; font-weight:800; letter-spacing:-0.02em; margin:34px 0 14px;}
+.section-title:first-child{margin-top:0;}
+.section-sub{color:var(--text2); font-size:13.5px; margin:-10px 0 18px;}
+
+/* hero */
+.hero{display:flex; flex-wrap:wrap; align-items:center; gap:24px; padding:26px;}
+.hero .temp-huge{font-size:76px; font-weight:200; line-height:1; letter-spacing:-0.03em;}
+.hero .cond{font-size:16px; color:var(--text2); margin-top:4px;}
+.hero-icon{font-size:60px; line-height:1;}
+.hero-meta{display:flex; gap:22px; flex-wrap:wrap; margin-left:auto;}
+.hero-meta .m{text-align:center;}
+.hero-meta .m .v{font-size:16px; font-weight:700;}
+.hero-meta .m .l{font-size:11px; color:var(--text3); text-transform:uppercase; letter-spacing:.03em;}
+
+.compare-wrap{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+@media(max-width:640px){.compare-wrap{grid-template-columns:1fr;}}
+
+.metric-box{padding:14px; border-radius:16px; background:var(--bg2); text-align:center;}
+.metric-box .v{font-size:20px; font-weight:700;}
+.metric-box .l{font-size:11px; color:var(--text3); margin-top:2px; text-transform:uppercase; letter-spacing:.03em;}
+
+/* hourly scroller */
+.hourly-scroll{display:flex; gap:14px; overflow-x:auto; padding-bottom:8px;}
+.hour-card{flex-shrink:0; text-align:center; padding:12px 14px; border-radius:16px; background:var(--bg2); min-width:66px;}
+.hour-card .t{font-size:11.5px; color:var(--text3); margin-bottom:6px;}
+.hour-card .ic{font-size:22px; margin:4px 0;}
+.hour-card .v{font-weight:700; font-size:14px;}
+.hour-card .p{font-size:11px; color:var(--accent); margin-top:2px;}
+
+/* day forecast */
+.day-row{display:grid; grid-template-columns:90px 1fr 40px 60px 50px; align-items:center; gap:10px; padding:10px 4px; border-bottom:1px solid var(--border); font-size:14px;}
+.day-row:last-child{border:none;}
+.day-row .bar-track{height:5px; border-radius:3px; background:var(--bg2); position:relative;}
+.day-row .bar-fill{position:absolute; height:100%; border-radius:3px; background:linear-gradient(90deg,var(--cool),var(--hot));}
+.day-row .lo{color:var(--text3);}
+
+/* toggle switch */
+.switch{width:46px;height:26px;border-radius:20px;background:var(--bg2);position:relative;cursor:pointer;border:1px solid var(--border); flex-shrink:0;}
+.switch .knob{position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,0.3); transition:transform .25s cubic-bezier(.2,.8,.2,1);}
+.switch.on{background:var(--accent);}
+.switch.on .knob{transform:translateX(20px);}
+
+/* table */
+table{width:100%; border-collapse:collapse; font-size:13.5px;}
+th{text-align:left; color:var(--text3); font-weight:600; font-size:11.5px; text-transform:uppercase; letter-spacing:.03em; padding:8px 10px; border-bottom:1px solid var(--border);}
+td{padding:10px; border-bottom:1px solid var(--border);}
+tr:last-child td{border:none;}
+.rank-badge{display:inline-flex; width:20px; height:20px; border-radius:50%; background:var(--accent); color:#fff; font-size:11px; font-weight:700; align-items:center; justify-content:center; margin-right:8px;}
+.rank-badge.gold{background:#ffd60a; color:#000;}
+
+/* chart canvas wrap */
+.chart-wrap{position:relative; height:260px;}
+.chart-wrap.tall{height:340px;}
+
+/* corr heatmap */
+.corr-grid{display:grid; gap:3px; margin-top:6px;}
+.corr-cell{aspect-ratio:1; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#fff;}
+.corr-label{font-size:10.5px; color:var(--text3); text-align:center;}
+
+/* pin star */
+.star-btn{cursor:pointer; font-size:18px; opacity:.4; transition:.15s;}
+.star-btn.active{opacity:1;}
+.star-btn:active{transform:scale(1.3);}
+
+/* skeleton */
+.skel{background:linear-gradient(90deg,var(--bg2) 25%, var(--border) 37%, var(--bg2) 63%); background-size:400% 100%; animation:shimmer 1.4s ease infinite; border-radius:10px;}
+@keyframes shimmer{0%{background-position:100% 0;}100%{background-position:0 0;}}
+.skel-block{height:220px; border-radius:18px;}
+
+/* banner */
+.banner{padding:14px 18px; border-radius:16px; display:flex; gap:12px; align-items:flex-start; font-size:13.5px; margin-bottom:18px;}
+.banner.info{background:rgba(10,132,255,0.1); color:var(--accent);}
+.banner.warn{background:rgba(255,159,10,0.12); color:var(--warm);}
+.banner b{color:var(--text);}
+
+.load-btn{
+  background:var(--accent); color:#fff; border:none; padding:12px 22px; border-radius:14px; font-size:14.5px; font-weight:700;
+  cursor:pointer; transition:transform .12s ease; box-shadow:0 6px 16px rgba(10,132,255,0.35);
+}
+.load-btn:active{transform:scale(0.96);}
+.load-btn:disabled{opacity:.6; cursor:default;}
+.ghost-btn{background:var(--bg2); color:var(--text); border:1px solid var(--border); padding:10px 16px; border-radius:12px; font-size:13px; font-weight:600; cursor:pointer;}
+.ghost-btn:active{transform:scale(0.96);}
+
+.footer-note{text-align:center; color:var(--text3); font-size:12px; margin-top:50px; line-height:1.7;}
+.two-col{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+@media(max-width:720px){.two-col{grid-template-columns:1fr;}}
+
+.pulse{display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--good); margin-right:6px; animation:pulse 1.6s ease infinite;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
+
+@media(prefers-reduced-motion: reduce){
+  .card, .skel, .pulse{animation:none !important;}
+  *{transition:none !important;}
+}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <div class="topbar">
+    <div class="brand">🌤️ <span>Weather Intelligence</span></div>
+    <div class="city-search-wrap">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input class="city-search" id="citySearchInput" placeholder="Search any city worldwide…" autocomplete="off">
+      <div class="search-results" id="searchResults" style="display:none;"></div>
+    </div>
+    <div class="topbar-spacer"></div>
+    <div class="updated-text" id="updatedText">—</div>
+    <div class="icon-btn" id="refreshBtn" title="Refresh">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+    </div>
+    <div class="icon-btn" id="themeBtn" title="Toggle theme">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" id="themeIcon"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/></svg>
+    </div>
+    <div class="icon-btn" id="unitBtn" title="Toggle °F/°C" style="font-size:12px; font-weight:800;">°F</div>
+  </div>
+
+  <div class="city-tabs" id="cityTabs"></div>
+
+  <div class="nav-tabs" id="navTabs">
+    <div class="nav-tab active" data-tab="today">Today</div>
+    <div class="nav-tab" data-tab="forecast">Forecast</div>
+    <div class="nav-tab" data-tab="analytics">Analytics</div>
+    <div class="nav-tab" data-tab="model">Model</div>
+    <div class="nav-tab" data-tab="accuracy">Accuracy</div>
+    <div class="nav-tab" data-tab="cities">Cities</div>
+  </div>
+
+  <div id="tab-today"></div>
+  <div id="tab-forecast" style="display:none;"></div>
+  <div id="tab-analytics" style="display:none;"></div>
+  <div id="tab-model" style="display:none;"></div>
+  <div id="tab-accuracy" style="display:none;"></div>
+  <div id="tab-cities" style="display:none;"></div>
+
+  <div class="footer-note">
+    Live data from Open‑Meteo (open‑source weather API, no key required). AI predictions are computed in your browser<br>
+    from a linear regression trained on 2 years of Alpharetta, GA history — see the Model tab for methodology.
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   WEATHER INTELLIGENCE DASHBOARD
+   ============================================================ */
+
+const DEFAULT_CITIES = [
+  {name:"Alpharetta", country:"United States", admin1:"Georgia", lat:33.8703, lon:-84.2748, tz:"America/New_York"},
+  {name:"Hyderabad", country:"India", admin1:"Telangana", lat:17.3850, lon:78.4867, tz:"Asia/Kolkata"},
+  {name:"Perth", country:"Australia", admin1:"Western Australia", lat:-31.9523, lon:115.8613, tz:"Australia/Perth"},
+  {name:"London", country:"United Kingdom", admin1:"England", lat:51.5072, lon:-0.1276, tz:"Europe/London"},
+  {name:"New York", country:"United States", admin1:"New York", lat:40.7128, lon:-74.0060, tz:"America/New_York"},
+];
+
+// Model trained on Alpharetta 2yr daily data (extracted from the notebook's LinearRegression fit)
+const MODEL = {
+  intercept: 79.263,
+  coef: {
+    temp_mean_lag1: -0.309292,
+    temp_mean_lag2: 0.145799,
+    humidity_lag1: -0.053528,
+    precip_lag1: -0.310910,
+    temp_std_7d: -0.054891,
+    day_sin: -0.853557,
+    day_cos: -4.125488,
+    hdd: -0.947257,
+    cdd: 0.916580
+  },
+  metrics: {mae: 3.29, rmse: 4.32, r2: 0.828},
+  comparison: [
+    {model:"Linear Regression", mae:3.288, rmse:4.322, r2:0.828},
+    {model:"Ridge Regression", mae:3.303, rmse:4.349, r2:0.826},
+    {model:"Lasso Regression", mae:3.468, rmse:4.638, r2:0.802},
+    {model:"SVR (RBF)", mae:3.503, rmse:4.705, r2:0.797},
+    {model:"Gradient Boosting", mae:3.660, rmse:4.806, r2:0.788},
+    {model:"Random Forest", mae:3.802, rmse:5.066, r2:0.764},
+  ],
+  trainInfo:{rows:724, start:"2024-07-13", end:"2026-07-06", split:"80/20 chronological (579 train / 145 test)"}
+};
+
+const WMO = {
+  0:["Clear sky","☀️"],1:["Mainly clear","🌤️"],2:["Partly cloudy","⛅"],3:["Overcast","☁️"],
+  45:["Fog","🌫️"],48:["Rime fog","🌫️"],
+  51:["Light drizzle","🌦️"],53:["Drizzle","🌦️"],55:["Dense drizzle","🌧️"],
+  56:["Freezing drizzle","🌧️"],57:["Freezing drizzle","🌧️"],
+  61:["Slight rain","🌧️"],63:["Rain","🌧️"],65:["Heavy rain","🌧️"],
+  66:["Freezing rain","🌧️"],67:["Freezing rain","🌧️"],
+  71:["Slight snow","🌨️"],73:["Snow","🌨️"],75:["Heavy snow","❄️"],77:["Snow grains","🌨️"],
+  80:["Slight showers","🌦️"],81:["Showers","🌧️"],82:["Violent showers","⛈️"],
+  85:["Snow showers","🌨️"],86:["Heavy snow showers","🌨️"],
+  95:["Thunderstorm","⛈️"],96:["Thunderstorm + hail","⛈️"],99:["Severe thunderstorm","⛈️"]
+};
+function wmoDesc(c){return (WMO[c]||["Unknown","🌡️"])[0];}
+function wmoIcon(c){return (WMO[c]||["Unknown","🌡️"])[1];}
+
+let state = {
+  theme: 'light',
+  unit: 'F',
+  cities: [...DEFAULT_CITIES],
+  pinned: DEFAULT_CITIES.map(c=>c.name),
+  recent: [],
+  activeCity: DEFAULT_CITIES[0],
+  activeTab: 'today',
+  liveCache: {},   // key -> {current, hourly, daily, fetchedAt}
+  archiveCache: {}, // key -> archive daily arrays
+  charts: {},      // chartjs instances keyed by canvas id
+};
+
+function cityKey(c){return `${c.name}|${c.lat.toFixed(2)}|${c.lon.toFixed(2)}`;}
+function fToC(f){return (f-32)*5/9;}
+function fmtTemp(f){ if(f==null||isNaN(f)) return "--°"; return state.unit==='F' ? Math.round(f)+"°" : Math.round(fToC(f))+"°"; }
+function fmtTempUnit(){return "°"+state.unit;}
+function mphToKmh(m){return m*1.60934;}
+function fmtWind(mph){ if(mph==null) return "--"; return state.unit==='F' ? Math.round(mph)+" mph" : Math.round(mphToKmh(mph))+" km/h"; }
+function compass(deg){
+  const dirs=["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+  return dirs[Math.round(((deg%360)/22.5))%16];
+}
+
+/* ---------------- persistent storage ---------------- */
+async function loadPrefs(){
+  try{
+    const r = await window.storage.get('wx-prefs');
+    if(r && r.value){
+      const p = JSON.parse(r.value);
+      state.theme = p.theme || 'light';
+      state.unit = p.unit || 'F';
+      if(p.pinned) state.pinned = p.pinned;
+      if(p.recent) state.recent = p.recent;
+      if(p.customCities) state.cities = [...DEFAULT_CITIES, ...p.customCities];
+    }
+  }catch(e){ /* first run */ }
+}
+async function savePrefs(){
+  try{
+    const customCities = state.cities.filter(c=>!DEFAULT_CITIES.some(d=>d.name===c.name && d.lat===c.lat));
+    await window.storage.set('wx-prefs', JSON.stringify({theme:state.theme, unit:state.unit, pinned:state.pinned, recent:state.recent.slice(0,8), customCities}));
+  }catch(e){}
+}
+
+/* ---------------- Open-Meteo fetches ---------------- */
+async function geocodeSearch(q){
+  const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=8&language=en&format=json`;
+  const res = await fetch(url);
+  const j = await res.json();
+  return (j.results||[]).map(r=>({name:r.name, country:r.country, admin1:r.admin1, lat:r.latitude, lon:r.longitude, tz:r.timezone}));
+}
+
+async function fetchLive(city){
+  const key = cityKey(city);
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}` +
+    `&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,rain,showers,weather_code,cloud_cover,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m,is_day,uv_index` +
+    `&hourly=temperature_2m,precipitation_probability,weather_code,relative_humidity_2m,wind_speed_10m,uv_index` +
+    `&daily=weather_code,temperature_2m_max,temperature_2m_min,temperature_2m_mean,apparent_temperature_max,apparent_temperature_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max,wind_direction_10m_dominant,uv_index_max,relative_humidity_2m_mean,sunrise,sunset` +
+    `&past_days=9&forecast_days=9&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto`;
+  const res = await fetch(url);
+  if(!res.ok) throw new Error("live fetch failed");
+  const j = await res.json();
+  state.liveCache[key] = {data:j, fetchedAt: Date.now()};
+  return j;
+}
+
+async function fetchArchive(city){
+  const key = cityKey(city);
+  if(state.archiveCache[key]) return state.archiveCache[key];
+  const end = new Date(); end.setDate(end.getDate()-2);
+  const start = new Date(end); start.setFullYear(start.getFullYear()-2);
+  const fmt = d=>d.toISOString().slice(0,10);
+  const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${city.lat}&longitude=${city.lon}` +
+    `&start_date=${fmt(start)}&end_date=${fmt(end)}` +
+    `&daily=temperature_2m_max,temperature_2m_min,temperature_2m_mean,relative_humidity_2m_mean,precipitation_sum,wind_speed_10m_max,wind_direction_10m_dominant` +
+    `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto`;
+  const res = await fetch(url);
+  if(!res.ok) throw new Error("archive fetch failed");
+  const j = await res.json();
+  state.archiveCache[key] = j;
+  return j;
+}
+
+/* ---------------- AI model ---------------- */
+function runModel(features){
+  let y = MODEL.intercept;
+  for(const k in MODEL.coef) y += MODEL.coef[k]*(features[k]||0);
+  return y;
+}
+function dayOfYear(d){ const start=new Date(d.getFullYear(),0,0); return Math.floor((d-start)/86400000); }
+function buildLiveFeatures(daily, idxToday){
+  // idxToday: index in daily arrays representing "today"
+  const meanArr = daily.temperature_2m_mean;
+  const humArr = daily.relative_humidity_2m_mean;
+  const precipArr = daily.precipitation_sum;
+  const todayMean = meanArr[idxToday];
+  const yestMean = meanArr[idxToday-1];
+  const humLag1 = humArr[idxToday];
+  const precipLag1 = precipArr[idxToday];
+  const last7 = meanArr.slice(Math.max(0,idxToday-6), idxToday+1).filter(v=>v!=null);
+  const mean7 = last7.reduce((a,b)=>a+b,0)/last7.length;
+  const variance = last7.reduce((a,b)=>a+(b-mean7)**2,0)/(last7.length-1||1);
+  const std7 = Math.sqrt(variance);
+  const tomorrow = new Date(daily.time[idxToday]); tomorrow.setDate(tomorrow.getDate()+1);
+  const doy = dayOfYear(tomorrow);
+  const day_sin = Math.sin(2*Math.PI*doy/365.25);
+  const day_cos = Math.cos(2*Math.PI*doy/365.25);
+  const hdd = Math.max(0, 65-todayMean);
+  const cdd = Math.max(0, todayMean-65);
+  return {
+    features:{temp_mean_lag1: todayMean, temp_mean_lag2: yestMean, humidity_lag1: humLag1, precip_lag1: precipLag1,
+      temp_std_7d: std7, day_sin, day_cos, hdd, cdd},
+    tomorrowDate: tomorrow
+  };
+}
+
+/* ---------------- helpers: charts ---------------- */
+function chartColors(){
+  const css = getComputedStyle(document.documentElement);
+  return {
+    text: css.getPropertyValue('--text2').trim() || '#666',
+    grid: state.theme==='dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)',
+  };
+}
+function destroyChart(id){ if(state.charts[id]){ state.charts[id].destroy(); delete state.charts[id]; } }
+function baseChartOpts(extra){
+  const c = chartColors();
+  return Object.assign({
+    responsive:true, maintainAspectRatio:false,
+    interaction:{mode:'index', intersect:false},
+    plugins:{ legend:{labels:{color:c.text, usePointStyle:true, boxWidth:8, font:{size:11}}},
+      tooltip:{backgroundColor: state.theme==='dark'?'#2c2c2e':'#fff', titleColor: state.theme==='dark'?'#fff':'#111', bodyColor:state.theme==='dark'?'#eee':'#333', borderColor:c.grid, borderWidth:1, padding:10, cornerRadius:10} },
+    scales:{ x:{ticks:{color:c.text, font:{size:10.5}}, grid:{color:c.grid}}, y:{ticks:{color:c.text, font:{size:10.5}}, grid:{color:c.grid}} }
+  }, extra||{});
+}
+
+/* ============================================================
+   RENDER: TODAY TAB
+   ============================================================ */
+function renderTodaySkeleton(){
+  document.getElementById('tab-today').innerHTML = `
+    <div class="grid g2">
+      <div class="skel skel-block"></div>
+      <div class="skel skel-block"></div>
+    </div>
+    <div class="skel skel-block" style="margin-top:16px;"></div>
+  `;
+}
+
+function computeTomorrowIdx(daily){
+  // find index of "today" (last date <= now in tz) - past_days=9 puts today near end-forecast_days boundary
+  const todayStr = new Date().toLocaleDateString('en-CA'); // yyyy-mm-dd approx local; good enough
+  let idx = daily.time.indexOf(todayStr);
+  if(idx===-1) idx = daily.time.length - 9; // fallback: forecast_days=9 appended after past_days=9
+  return idx;
+}
+
+async function renderToday(){
+  renderTodaySkeleton();
+  const city = state.activeCity;
+  let j;
+  try{ j = await fetchLive(city); }
+  catch(e){
+    document.getElementById('tab-today').innerHTML = `<div class="banner warn"><b>Couldn't reach Open‑Meteo.</b><br>Check your connection and hit refresh.</div>`;
+    return;
+  }
+  const cur = j.current;
+  const daily = j.daily;
+  const idxToday = computeTomorrowIdx(daily);
+
+  // AI model prediction for tomorrow
+  let modelResult = null;
+  try{
+    const {features, tomorrowDate} = buildLiveFeatures(daily, idxToday);
+    const pred = runModel(features);
+    modelResult = {pred, tomorrowDate, features};
+  }catch(e){ /* not enough data */ }
+
+  const omTomorrow = daily.temperature_2m_mean[idxToday+1];
+  const cond = wmoDesc(cur.weather_code), icon = wmoIcon(cur.weather_code);
+
+  // log today's prediction for accuracy tracking (fire and forget)
+  if(modelResult) logForecast(city, daily.time[idxToday], modelResult.pred, omTomorrow);
+
+  let html = '';
+
+  // hero + comparison
+  html += `<div class="grid g2">`;
+  html += `
+    <div class="card hero">
+      <div class="hero-icon">${icon}</div>
+      <div>
+        <div class="temp-huge">${fmtTemp(cur.temperature_2m)}</div>
+        <div class="cond">${cond} · Feels ${fmtTemp(cur.apparent_temperature)}</div>
+        <div class="hint" style="margin-top:2px;"><span class="tag live" style="display:inline-block;">Live · Open‑Meteo</span></div>
+      </div>
+      <div class="hero-meta">
+        <div class="m"><div class="v">${cur.relative_humidity_2m}%</div><div class="l">Humidity</div></div>
+        <div class="m"><div class="v">${fmtWind(cur.wind_speed_10m)}</div><div class="l">${compass(cur.wind_direction_10m)} Wind</div></div>
+        <div class="m"><div class="v">${Math.round(cur.pressure_msl)}</div><div class="l">hPa</div></div>
+        <div class="m"><div class="v">${cur.cloud_cover}%</div><div class="l">Cloud</div></div>
+        <div class="m"><div class="v">${cur.uv_index!=null?cur.uv_index.toFixed(1):'--'}</div><div class="l">UV Index</div></div>
+      </div>
+    </div>`;
+
+  if(modelResult){
+    const diff = Math.abs(modelResult.pred - omTomorrow).toFixed(1);
+    html += `
+    <div class="card">
+      <h3>Tomorrow's Mean Temp <span class="tag">AI Model Prediction</span></h3>
+      <div class="compare-wrap">
+        <div class="metric-box">
+          <div class="v" style="color:var(--accent);">${fmtTemp(modelResult.pred)}</div>
+          <div class="l">My Linear Regression</div>
+        </div>
+        <div class="metric-box">
+          <div class="v">${fmtTemp(omTomorrow)}</div>
+          <div class="l">Open‑Meteo Forecast</div>
+        </div>
+      </div>
+      <p class="hint">Models differ by ${diff}${fmtTempUnit()}. My model was trained on 2 years of Alpharetta history — test-set MAE ${MODEL.metrics.mae}°F, R² ${MODEL.metrics.r2}. See the <b>Model</b> tab for full methodology, and <b>Accuracy</b> to watch this comparison resolve against tomorrow's actual weather.</p>
+    </div>`;
+  } else {
+    html += `<div class="card"><h3>AI Model Prediction</h3><p class="hint">Not enough recent daily history returned for this location to compute lag features yet.</p></div>`;
+  }
+  html += `</div>`;
+
+  // more current metrics
+  html += `<div class="grid g4" style="margin-top:16px;">
+    <div class="card metric-box"><div class="v">${fmtWind(cur.wind_gusts_10m)}</div><div class="l">Wind Gusts</div></div>
+    <div class="card metric-box"><div class="v">${(daily.precipitation_probability_max?.[idxToday]) ?? '--'}%</div><div class="l">Rain Chance</div></div>
+    <div class="card metric-box"><div class="v">${fmtTimeOnly(daily.sunrise?.[idxToday])}</div><div class="l">Sunrise</div></div>
+    <div class="card metric-box"><div class="v">${fmtTimeOnly(daily.sunset?.[idxToday])}</div><div class="l">Sunset</div></div>
+  </div>`;
+
+  // advisory banner (heuristic, not an official alert feed)
+  const advisories = buildAdvisories(cur, daily, idxToday);
+  if(advisories.length){
+    html += `<div class="banner warn" style="margin-top:16px;"><div>⚠️</div><div><b>Weather Advisory</b> (heuristic, not an official alert service)<br>${advisories.join(' · ')}</div></div>`;
+  }
+
+  // hourly scroller
+  html += `<div class="card" style="margin-top:16px;">
+    <h3>Next 24 Hours <span class="tag live">Live</span></h3>
+    <div class="hourly-scroll" id="hourlyScroll"></div>
+  </div>`;
+
+  document.getElementById('tab-today').innerHTML = html;
+  renderHourlyScroll(j);
+  document.getElementById('updatedText').textContent = "Updated " + new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+}
+
+function fmtTimeOnly(iso){ if(!iso) return "--"; return new Date(iso).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}); }
+
+function buildAdvisories(cur, daily, idxToday){
+  const list = [];
+  if(cur.uv_index >= 8) list.push("Very high UV — limit midday sun exposure");
+  if(cur.wind_gusts_10m >= 35) list.push("Strong wind gusts expected");
+  if((daily.precipitation_probability_max?.[idxToday]||0) >= 70) list.push("High chance of rain today");
+  if(cur.temperature_2m <= 32) list.push("Freezing conditions");
+  if(cur.temperature_2m >= 100) list.push("Extreme heat");
+  return list;
+}
+
+function renderHourlyScroll(j){
+  const now = new Date();
+  const hourly = j.hourly;
+  let startIdx = hourly.time.findIndex(t => new Date(t) >= now);
+  if(startIdx===-1) startIdx = 0;
+  const el = document.getElementById('hourlyScroll');
+  let html = '';
+  for(let i=startIdx;i<startIdx+24 && i<hourly.time.length;i++){
+    const d = new Date(hourly.time[i]);
+    html += `<div class="hour-card">
+      <div class="t">${i===startIdx?'Now':d.toLocaleTimeString([], {hour:'numeric'})}</div>
+      <div class="ic">${wmoIcon(hourly.weather_code[i])}</div>
+      <div class="v">${fmtTemp(hourly.temperature_2m[i])}</div>
+      <div class="p">${hourly.precipitation_probability[i]}%</div>
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+/* ============================================================
+   RENDER: FORECAST TAB
+   ============================================================ */
+async function renderForecast(){
+  document.getElementById('tab-forecast').innerHTML = `<div class="skel skel-block"></div>`;
+  const city = state.activeCity;
+  let j;
+  try{ j = state.liveCache[cityKey(city)]?.data || await fetchLive(city); }
+  catch(e){ document.getElementById('tab-forecast').innerHTML = `<div class="banner warn">Couldn't load forecast.</div>`; return; }
+  const daily = j.daily;
+  const idxToday = computeTomorrowIdx(daily);
+  const maxAll = Math.max(...daily.temperature_2m_max.slice(idxToday));
+  const minAll = Math.min(...daily.temperature_2m_min.slice(idxToday));
+  let rows = '';
+  for(let i=idxToday;i<Math.min(idxToday+8, daily.time.length);i++){
+    const d = new Date(daily.time[i]);
+    const label = i===idxToday ? 'Today' : d.toLocaleDateString([], {weekday:'short'});
+    const hi = daily.temperature_2m_max[i], lo = daily.temperature_2m_min[i];
+    const left = ((lo-minAll)/(maxAll-minAll||1))*100;
+    const width = ((hi-lo)/(maxAll-minAll||1))*100;
+    rows += `<div class="day-row">
+      <div>${label}</div>
+      <div style="display:flex; align-items:center; gap:8px;"><span style="font-size:18px;">${wmoIcon(daily.weather_code[i])}</span><span style="font-size:12.5px; color:var(--text2);">${wmoDesc(daily.weather_code[i])}</span></div>
+      <div style="font-size:12px; color:var(--accent);">${daily.precipitation_probability_max[i]??0}%</div>
+      <div class="bar-track"><div class="bar-fill" style="left:${left}%; width:${width}%;"></div></div>
+      <div><b>${fmtTemp(hi)}</b> <span class="lo">${fmtTemp(lo)}</span></div>
+    </div>`;
+  }
+
+  let html = `<div class="grid g2">
+    <div class="card">
+      <h3>8‑Day Forecast <span class="tag live">Open‑Meteo</span></h3>
+      ${rows}
+    </div>
+    <div class="card">
+      <h3>Multi‑Day Temperature Outlook</h3>
+      <div class="chart-wrap"><canvas id="forecastChart"></canvas></div>
+      <p class="hint">Shaded band shows the daily high/low range; the line is the forecast mean.</p>
+    </div>
+  </div>`;
+
+  html += `<div class="grid g2" style="margin-top:16px;">
+    <div class="card"><h3>Precipitation Outlook</h3><div class="chart-wrap"><canvas id="precipForecastChart"></canvas></div></div>
+    <div class="card"><h3>UV Index & Wind Outlook</h3><div class="chart-wrap"><canvas id="uvWindChart"></canvas></div></div>
+  </div>`;
+
+  document.getElementById('tab-forecast').innerHTML = html;
+
+  const labels = daily.time.slice(idxToday, idxToday+8).map(t=>new Date(t).toLocaleDateString([], {weekday:'short'}));
+  destroyChart('forecastChart');
+  state.charts['forecastChart'] = new Chart(document.getElementById('forecastChart'), {
+    type:'line',
+    data:{labels, datasets:[
+      {label:'High', data:daily.temperature_2m_max.slice(idxToday,idxToday+8), borderColor:'#ff453a', backgroundColor:'rgba(255,69,58,0.08)', fill:'+1', tension:.35, pointRadius:2},
+      {label:'Low', data:daily.temperature_2m_min.slice(idxToday,idxToday+8), borderColor:'#64d2ff', backgroundColor:'rgba(100,210,255,0.08)', fill:false, tension:.35, pointRadius:2},
+      {label:'Mean', data:daily.temperature_2m_mean.slice(idxToday,idxToday+8), borderColor:'#0a84ff', borderDash:[5,4], tension:.35, pointRadius:2},
+    ]},
+    options: baseChartOpts()
+  });
+  destroyChart('precipForecastChart');
+  state.charts['precipForecastChart'] = new Chart(document.getElementById('precipForecastChart'), {
+    type:'bar',
+    data:{labels, datasets:[
+      {label:'Precip (in)', data:daily.precipitation_sum.slice(idxToday,idxToday+8), backgroundColor:'#5f9ccf', yAxisID:'y'},
+      {label:'Rain Chance %', data:daily.precipitation_probability_max.slice(idxToday,idxToday+8), type:'line', borderColor:'#0a84ff', yAxisID:'y1', tension:.3}
+    ]},
+    options: baseChartOpts({scales:{ y:{position:'left', ticks:{color:chartColors().text}}, y1:{position:'right', grid:{drawOnChartArea:false}, ticks:{color:chartColors().text}}, x:{ticks:{color:chartColors().text}} }})
+  });
+  destroyChart('uvWindChart');
+  state.charts['uvWindChart'] = new Chart(document.getElementById('uvWindChart'), {
+    type:'bar',
+    data:{labels, datasets:[
+      {label:'UV Index', data:daily.uv_index_max.slice(idxToday,idxToday+8), backgroundColor:'#ff9f0a'},
+      {label:'Wind Max (mph)', data:daily.wind_speed_10m_max.slice(idxToday,idxToday+8), backgroundColor:'#8B5CF6'}
+    ]},
+    options: baseChartOpts()
+  });
+}
+
+/* ============================================================
+   RENDER: ANALYTICS TAB (2-year historical, on demand)
+   ============================================================ */
+async function renderAnalytics(){
+  const city = state.activeCity;
+  const key = cityKey(city);
+  const el = document.getElementById('tab-analytics');
+  if(!state.archiveCache[key]){
+    el.innerHTML = `
+      <div class="card" style="text-align:center; padding:40px 20px;">
+        <h3 style="justify-content:center;">Load 2‑Year Historical Analysis</h3>
+        <p class="hint">Pulls ~730 days of daily archive data for ${city.name} from Open‑Meteo and computes every chart below live in your browser — trends, distributions, correlations, wind patterns, and autocorrelation.</p>
+        <button class="load-btn" id="loadAnalyticsBtn" style="margin-top:14px;">Load Historical Data</button>
+      </div>`;
+    document.getElementById('loadAnalyticsBtn').onclick = async ()=>{
+      document.getElementById('loadAnalyticsBtn').disabled = true;
+      document.getElementById('loadAnalyticsBtn').textContent = "Loading…";
+      try{ await fetchArchive(city); renderAnalyticsBody(); }
+      catch(e){ el.innerHTML = `<div class="banner warn">Couldn't load archive data. Try again.</div>`; }
+    };
+    return;
+  }
+  renderAnalyticsBody();
+}
+
+function mean(a){return a.reduce((x,y)=>x+y,0)/a.length;}
+function std(a){const m=mean(a); return Math.sqrt(a.reduce((s,v)=>s+(v-m)**2,0)/(a.length-1));}
+function corr(a,b){
+  const ma=mean(a), mb=mean(b);
+  let num=0, da=0, db=0;
+  for(let i=0;i<a.length;i++){ num+=(a[i]-ma)*(b[i]-mb); da+=(a[i]-ma)**2; db+=(b[i]-mb)**2; }
+  return num/Math.sqrt(da*db);
+}
+function rollingMean(arr, w){
+  const out = new Array(arr.length).fill(null);
+  const half = Math.floor(w/2);
+  for(let i=0;i<arr.length;i++){
+    if(i<half || i>=arr.length-half) continue;
+    const slice = arr.slice(i-half, i+half+1);
+    out[i] = mean(slice);
+  }
+  return out;
+}
+function quantile(sorted, q){
+  const pos = (sorted.length-1)*q; const base=Math.floor(pos); const rest=pos-base;
+  return sorted[base+1]!==undefined ? sorted[base]+rest*(sorted[base+1]-sorted[base]) : sorted[base];
+}
+
+function renderAnalyticsBody(){
+  const city = state.activeCity;
+  const arc = state.archiveCache[cityKey(city)].daily;
+  const dates = arc.time.map(t=>new Date(t));
+  const tmax = arc.temperature_2m_max, tmin = arc.temperature_2m_min, tmean = arc.temperature_2m_mean;
+  const hum = arc.relative_humidity_2m_mean, precip = arc.precipitation_sum;
+  const wspd = arc.wind_speed_10m_max, wdir = arc.wind_direction_10m_dominant;
+
+  const n = dates.length;
+  const tmean7 = rollingMean(tmean, 7);
+  const hum7 = rollingMean(hum, 7);
+
+  // monthly precip
+  const monthKey = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  const monthlyMap = {};
+  dates.forEach((d,i)=>{ const k=monthKey(d); monthlyMap[k]=(monthlyMap[k]||0)+ (precip[i]||0); });
+  const monthLabels = Object.keys(monthlyMap);
+  const monthVals = Object.values(monthlyMap);
+
+  // monthly temp distribution (box-ish: min, q1, median, q3, max)
+  const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const byMonth = Array.from({length:12}, ()=>[]);
+  dates.forEach((d,i)=>{ if(tmean[i]!=null) byMonth[d.getMonth()].push(tmean[i]); });
+  const boxStats = byMonth.map(arr=>{
+    const s=[...arr].sort((a,b)=>a-b);
+    if(!s.length) return {min:0,q1:0,med:0,q3:0,max:0};
+    return {min:s[0], q1:quantile(s,.25), med:quantile(s,.5), q3:quantile(s,.75), max:s[s.length-1]};
+  });
+
+  // correlation matrix
+  const corrCols = {"Max Temp":tmax, "Min Temp":tmin, "Mean Temp":tmean, "Humidity":hum, "Precip":precip};
+  const corrNames = Object.keys(corrCols);
+  const cleanIdx = tmean.map((v,i)=> [tmax[i],tmin[i],tmean[i],hum[i],precip[i]].every(x=>x!=null) ? i : -1).filter(i=>i>=0);
+  const corrMatrix = corrNames.map(r=> corrNames.map(c=>{
+    const a = cleanIdx.map(i=>corrCols[r][i]), b = cleanIdx.map(i=>corrCols[c][i]);
+    return corr(a,b);
+  }));
+
+  // year over year
+  const years = [...new Set(dates.map(d=>d.getFullYear()))].sort();
+  const yoySeries = years.map(y=>{
+    const idxs = dates.map((d,i)=>d.getFullYear()===y?i:-1).filter(i=>i>=0);
+    return {year:y, x: idxs.map(i=>`${dates[i].getMonth()+1}-${dates[i].getDate()}`), y: idxs.map(i=>tmean7[i])};
+  });
+
+  // histogram
+  const validTemps = tmean.filter(v=>v!=null);
+  const histMin = Math.floor(Math.min(...validTemps)/5)*5, histMax = Math.ceil(Math.max(...validTemps)/5)*5;
+  const bins = []; for(let b=histMin;b<histMax;b+=5) bins.push(b);
+  const histCounts = bins.map(b=> validTemps.filter(v=>v>=b && v<b+5).length);
+
+  // extreme days
+  const extreme = {
+    "90°F+ Days": tmax.filter(v=>v>=90).length,
+    "Freezing Days (≤32°F)": tmin.filter(v=>v<=32).length,
+    "Rainy Days (>0.1in)": precip.filter(v=>v>0.1).length,
+    "Heavy Rain (>1in)": precip.filter(v=>v>1).length,
+  };
+
+  // degree days cumulative (this calendar year)
+  const curYear = new Date().getFullYear();
+  const yIdx = dates.map((d,i)=>d.getFullYear()===curYear?i:-1).filter(i=>i>=0);
+  let hddCum=0, cddCum=0;
+  const hddArr=[], cddArr=[], ddLabels=[];
+  yIdx.forEach(i=>{
+    const t = tmean[i]; if(t==null) return;
+    hddCum += Math.max(0,65-t); cddCum += Math.max(0,t-65);
+    hddArr.push(hddCum); cddArr.push(cddCum); ddLabels.push(`${dates[i].getMonth()+1}/${dates[i].getDate()}`);
+  });
+
+  // wind rose (sector counts, colored by avg speed)
+  const compassLabels = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+  const sectorCounts = new Array(16).fill(0);
+  const sectorSpeedSum = new Array(16).fill(0);
+  wdir.forEach((d,i)=>{ if(d==null) return; const sec = Math.round(((d%360)/22.5))%16; sectorCounts[sec]++; sectorSpeedSum[sec]+= (wspd[i]||0); });
+  const sectorAvgSpeed = sectorCounts.map((c,i)=> c? sectorSpeedSum[i]/c : 0);
+
+  // ACF/PACF (simple autocorrelation, no partial-acf solver — use Durbin-Levinson lite via linear regression per lag as approx PACF)
+  const series = validTemps;
+  const nlags = 14;
+  const seriesMean = mean(series);
+  const c0 = series.reduce((s,v)=>s+(v-seriesMean)**2,0)/series.length;
+  const acf = [1];
+  for(let lag=1;lag<=nlags;lag++){
+    let s=0;
+    for(let t=0;t<series.length-lag;t++) s += (series[t]-seriesMean)*(series[t+lag]-seriesMean);
+    acf.push((s/series.length)/c0);
+  }
+  const confBound = 1.96/Math.sqrt(series.length);
+
+  // feature vs target correlation (recreate the model's feature story)
+  const targetArr = tmean.slice(1); // next day mean approx (shift)
+  const laggedMean = tmean.slice(0,-1);
+  const laggedHum = hum.slice(0,-1);
+  const laggedPrecip = precip.slice(0,-1);
+  const featCorrPairs = [
+    ["Mean Temp (lag1)", laggedMean],
+    ["Humidity (lag1)", laggedHum],
+    ["Precip (lag1)", laggedPrecip],
+  ];
+  const featCorr = featCorrPairs.map(([name, arr])=>{
+    const idxs = arr.map((v,i)=> (v!=null && targetArr[i]!=null) ? i: -1).filter(i=>i>=0);
+    return {name, c: corr(idxs.map(i=>arr[i]), idxs.map(i=>targetArr[i]))};
+  }).sort((a,b)=>a.c-b.c);
+
+  const dateRangeStr = `${dates[0].toLocaleDateString()} → ${dates[n-1].toLocaleDateString()}`;
+  const nullCount = tmean.filter(v=>v==null).length;
+
+  let html = `
+  <div class="banner info"><div>ℹ️</div><div><b>${n} days</b> of daily archive data for ${city.name} loaded live from Open‑Meteo (${dateRangeStr}). Missing values: <b>${nullCount}</b>. All charts below are computed client‑side from this dataset.</div></div>
+
+  <div class="section-title">Historical Trends</div>
+  <div class="grid g2">
+    <div class="card"><h3>Daily Temperature (High / Low / 7‑Day Avg)</h3><div class="chart-wrap tall"><canvas id="tempTrendChart"></canvas></div></div>
+    <div class="card"><h3>Humidity Trend</h3><div class="chart-wrap tall"><canvas id="humTrendChart"></canvas></div></div>
+  </div>
+  <div class="grid g2" style="margin-top:16px;">
+    <div class="card"><h3>Daily Precipitation</h3><div class="chart-wrap"><canvas id="precipDailyChart"></canvas></div></div>
+    <div class="card"><h3>Monthly Precipitation Totals</h3><div class="chart-wrap"><canvas id="precipMonthlyChart"></canvas></div></div>
+  </div>
+
+  <div class="section-title">Distributions</div>
+  <div class="grid g2">
+    <div class="card"><h3>Monthly Temperature Range (Min–Q1–Median–Q3–Max)</h3><div class="chart-wrap"><canvas id="boxChart"></canvas></div></div>
+    <div class="card"><h3>Temperature Histogram</h3><div class="chart-wrap"><canvas id="histChart"></canvas></div></div>
+  </div>
+
+  <div class="section-title">Patterns & Relationships</div>
+  <div class="grid g2">
+    <div class="card">
+      <h3>Correlation Matrix</h3>
+      <div class="corr-grid" style="grid-template-columns:auto repeat(${corrNames.length},1fr);">
+        <div></div>${corrNames.map(n=>`<div class="corr-label">${n}</div>`).join('')}
+        ${corrMatrix.map((row,i)=>`<div class="corr-label" style="text-align:right; padding-right:6px; display:flex; align-items:center; justify-content:flex-end;">${corrNames[i]}</div>` + row.map(v=>`<div class="corr-cell" style="background:${corrColor(v)}">${v.toFixed(2)}</div>`).join('')).join('')}
+      </div>
+    </div>
+    <div class="card"><h3>Temperature vs. Humidity</h3><div class="chart-wrap"><canvas id="scatterChart"></canvas></div></div>
+  </div>
+  <div class="grid g2" style="margin-top:16px;">
+    <div class="card"><h3>Year-over-Year Temperature Overlay</h3><div class="chart-wrap"><canvas id="yoyChart"></canvas></div></div>
+    <div class="card"><h3>Wind Rose (frequency by direction, colored by avg speed)</h3><div class="chart-wrap"><canvas id="windRoseChart"></canvas></div></div>
+  </div>
+
+  <div class="section-title">Time-Series Structure</div>
+  <div class="grid g2">
+    <div class="card"><h3>Autocorrelation (ACF)</h3><div class="chart-wrap"><canvas id="acfChart"></canvas></div><p class="hint">Dashed lines mark the 95% confidence bound (±${confBound.toFixed(3)}).</p></div>
+    <div class="card"><h3>Cumulative Degree Days (${curYear})</h3><div class="chart-wrap"><canvas id="degreeDaysChart"></canvas></div></div>
+  </div>
+
+  <div class="section-title">Extremes &amp; Feature Signal</div>
+  <div class="grid g2">
+    <div class="card"><h3>Extreme Weather Day Counts</h3><div class="chart-wrap"><canvas id="extremeChart"></canvas></div></div>
+    <div class="card"><h3>Feature Correlation vs. Next-Day Mean Temp</h3><div class="chart-wrap"><canvas id="featCorrChart"></canvas></div><p class="hint">Computed on this city's live data (illustrative) — the deployed model itself was trained once on Alpharetta history; see the Model tab.</p></div>
+  </div>
+
+  <div class="section-title">Data Quality</div>
+  <div class="grid g4">
+    <div class="card metric-box"><div class="v">${n}</div><div class="l">Total Days</div></div>
+    <div class="card metric-box"><div class="v">${nullCount}</div><div class="l">Missing Values</div></div>
+    <div class="card metric-box"><div class="v">${mean(validTemps).toFixed(1)}°F</div><div class="l">Mean Temp</div></div>
+    <div class="card metric-box"><div class="v">${std(validTemps).toFixed(1)}°F</div><div class="l">Temp Std Dev</div></div>
+  </div>
+  `;
+  el.innerHTML = html;
+
+  const labelsAll = dates.map(d=>d.toLocaleDateString([], {month:'short', day:'numeric'}));
+
+  destroyChart('tempTrendChart');
+  state.charts['tempTrendChart'] = new Chart(document.getElementById('tempTrendChart'), {
+    type:'line', data:{labels:labelsAll, datasets:[
+      {label:'High', data:tmax, borderColor:'rgba(252,96,96,0.35)', pointRadius:0, borderWidth:1},
+      {label:'Low', data:tmin, borderColor:'rgba(75,130,250,0.35)', pointRadius:0, borderWidth:1},
+      {label:'7-Day Avg', data:tmean7, borderColor:'#111', borderWidth:2, pointRadius:0},
+    ]}, options: baseChartOpts()
+  });
+  destroyChart('humTrendChart');
+  state.charts['humTrendChart'] = new Chart(document.getElementById('humTrendChart'), {
+    type:'line', data:{labels:labelsAll, datasets:[
+      {label:'Daily', data:hum, borderColor:'rgba(6,182,212,0.3)', pointRadius:0, borderWidth:1},
+      {label:'7-Day Avg', data:hum7, borderColor:'#0E7490', borderWidth:2.5, pointRadius:0},
+    ]}, options: baseChartOpts()
+  });
+  destroyChart('precipDailyChart');
+  state.charts['precipDailyChart'] = new Chart(document.getElementById('precipDailyChart'), {
+    type:'bar', data:{labels:labelsAll, datasets:[{label:'Precip (in)', data:precip, backgroundColor:'#5f9ccf'}]},
+    options: baseChartOpts({scales:{x:{ticks:{display:false}, grid:{display:false}}, y:{ticks:{color:chartColors().text}}}})
+  });
+  destroyChart('precipMonthlyChart');
+  state.charts['precipMonthlyChart'] = new Chart(document.getElementById('precipMonthlyChart'), {
+    type:'bar', data:{labels:monthLabels, datasets:[{label:'Monthly Total (in)', data:monthVals, backgroundColor:'#2563EB'}]},
+    options: baseChartOpts({scales:{x:{ticks:{color:chartColors().text, maxRotation:60, minRotation:60}}, y:{ticks:{color:chartColors().text}}}})
+  });
+  destroyChart('boxChart');
+  state.charts['boxChart'] = new Chart(document.getElementById('boxChart'), {
+    type:'bar',
+    data:{labels:monthNames, datasets:[
+      {label:'Min–Max Range', data:boxStats.map(b=>[b.min,b.max]), backgroundColor:'rgba(37,99,235,0.15)', borderSkipped:false},
+      {label:'Q1–Q3 (IQR)', data:boxStats.map(b=>[b.q1,b.q3]), backgroundColor:'rgba(37,99,235,0.55)'},
+      {label:'Median', data:boxStats.map(b=>b.med), type:'line', borderColor:'#111', pointBackgroundColor:'#111', pointRadius:4, showLine:false},
+    ]}, options: baseChartOpts()
+  });
+  destroyChart('histChart');
+  state.charts['histChart'] = new Chart(document.getElementById('histChart'), {
+    type:'bar', data:{labels:bins.map(b=>b+'–'+(b+5)), datasets:[{label:'Days', data:histCounts, backgroundColor:'#76ab63'}]},
+    options: baseChartOpts({scales:{x:{ticks:{color:chartColors().text, maxRotation:60, minRotation:60}}, y:{ticks:{color:chartColors().text}}}})
+  });
+  destroyChart('scatterChart');
+  state.charts['scatterChart'] = new Chart(document.getElementById('scatterChart'), {
+    type:'scatter', data:{datasets:[{label:'Days', data:cleanIdx.map(i=>({x:tmean[i], y:hum[i]})), backgroundColor:'rgba(37,99,235,0.5)', pointRadius:3}]},
+    options: baseChartOpts({scales:{x:{title:{display:true,text:'Mean Temp (°F)', color:chartColors().text}, ticks:{color:chartColors().text}}, y:{title:{display:true,text:'Humidity (%)', color:chartColors().text}, ticks:{color:chartColors().text}}}})
+  });
+  destroyChart('yoyChart');
+  const palette = ['#2563EB','#10B981','#F59E0B','#EF4444','#8B5CF6'];
+  state.charts['yoyChart'] = new Chart(document.getElementById('yoyChart'), {
+    type:'line',
+    data:{labels: yoySeries[0]?.x || [], datasets: yoySeries.map((s,i)=>({label:String(s.year), data:s.y, borderColor:palette[i%palette.length], pointRadius:0, borderWidth:2}))},
+    options: baseChartOpts({scales:{x:{ticks:{display:false}, grid:{display:false}}, y:{ticks:{color:chartColors().text}}}})
+  });
+  destroyChart('windRoseChart');
+  state.charts['windRoseChart'] = new Chart(document.getElementById('windRoseChart'), {
+    type:'polarArea',
+    data:{labels:compassLabels, datasets:[{data:sectorCounts, backgroundColor:sectorAvgSpeed.map(s=>speedToColor(s))}]},
+    options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}, tooltip:{callbacks:{label:(ctx)=>`${ctx.label}: ${ctx.raw} days, avg ${sectorAvgSpeed[ctx.dataIndex].toFixed(1)} mph`}}}, scales:{r:{ticks:{display:false}, grid:{color:chartColors().grid}}}}
+  });
+  destroyChart('acfChart');
+  state.charts['acfChart'] = new Chart(document.getElementById('acfChart'), {
+    type:'bar',
+    data:{labels: acf.map((_,i)=>i), datasets:[{label:'ACF', data:acf, backgroundColor:'#3b75f5'}]},
+    options: baseChartOpts({plugins:{legend:{display:false}, annotation:{}}, scales:{x:{ticks:{color:chartColors().text}}, y:{ticks:{color:chartColors().text}}}})
+  });
+  destroyChart('degreeDaysChart');
+  state.charts['degreeDaysChart'] = new Chart(document.getElementById('degreeDaysChart'), {
+    type:'line',
+    data:{labels:ddLabels, datasets:[
+      {label:'Heating Degree Days', data:hddArr, borderColor:'#EF4444', pointRadius:0, borderWidth:2.5},
+      {label:'Cooling Degree Days', data:cddArr, borderColor:'#3B82F6', pointRadius:0, borderWidth:2.5},
+    ]}, options: baseChartOpts({scales:{x:{ticks:{display:false}, grid:{display:false}}, y:{ticks:{color:chartColors().text}}}})
+  });
+  destroyChart('extremeChart');
+  state.charts['extremeChart'] = new Chart(document.getElementById('extremeChart'), {
+    type:'bar', data:{labels:Object.keys(extreme), datasets:[{data:Object.values(extreme), backgroundColor:['#EF4444','#64d2ff','#5f9ccf','#0a3d91']}]},
+    options: baseChartOpts({plugins:{legend:{display:false}}, scales:{x:{ticks:{color:chartColors().text}}, y:{ticks:{color:chartColors().text}}}})
+  });
+  destroyChart('featCorrChart');
+  state.charts['featCorrChart'] = new Chart(document.getElementById('featCorrChart'), {
+    type:'bar',
+    data:{labels:featCorr.map(f=>f.name), datasets:[{data:featCorr.map(f=>f.c), backgroundColor:featCorr.map(f=>f.c<0?'#EF4444':'#2563EB')}]},
+    options: baseChartOpts({indexAxis:'y', plugins:{legend:{display:false}}})
+  });
+}
+function corrColor(v){
+  // -1 red .. 0 white .. 1 blue
+  if(v>=0){ const t=v; return `rgba(37,99,235,${0.15+0.7*t})`; }
+  const t=-v; return `rgba(239,68,68,${0.15+0.7*t})`;
+}
+function speedToColor(s){
+  const stops = [[0,'#DBEAFE'],[5,'#93C5FD'],[10,'#3B82F6'],[15,'#305cd9'],[25,'#062270']];
+  for(let i=stops.length-1;i>=0;i--) if(s>=stops[i][0]) return stops[i][1];
+  return stops[0][1];
+}
+
+/* ============================================================
+   RENDER: MODEL TAB
+   ============================================================ */
+function renderModel(){
+  const feats = Object.entries(MODEL.coef).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1]));
+  let compRows = MODEL.comparison.map((m,i)=>`
+    <tr>
+      <td><span class="rank-badge ${i===0?'gold':''}">${i+1}</span>${m.model}</td>
+      <td>${m.mae.toFixed(2)}°F</td>
+      <td>${m.rmse.toFixed(2)}°F</td>
+      <td>${m.r2.toFixed(3)}</td>
+    </tr>`).join('');
+
+  document.getElementById('tab-model').innerHTML = `
+    <div class="banner info"><div>🧠</div><div>
+      <b>Next-day mean temperature model</b> — a Linear Regression trained on ${MODEL.trainInfo.rows} days of Alpharetta, GA history
+      (${MODEL.trainInfo.start} → ${MODEL.trainInfo.end}), using a chronological ${MODEL.trainInfo.split}. Six model families were
+      compared; Linear Regression generalized best on the held-out test set. Coefficients below run live in this dashboard —
+      every "AI Model Prediction" you see was computed by this exact formula in your browser.
+    </div></div>
+
+    <div class="grid g4">
+      <div class="card metric-box"><div class="v">${MODEL.metrics.mae}°F</div><div class="l">Test MAE</div></div>
+      <div class="card metric-box"><div class="v">${MODEL.metrics.rmse}°F</div><div class="l">Test RMSE</div></div>
+      <div class="card metric-box"><div class="v">${MODEL.metrics.r2}</div><div class="l">Test R²</div></div>
+      <div class="card metric-box"><div class="v">${MODEL.trainInfo.rows}</div><div class="l">Training Rows</div></div>
+    </div>
+
+    <div class="grid g2" style="margin-top:16px;">
+      <div class="card">
+        <h3>Model Coefficients (sorted by influence)</h3>
+        <div class="chart-wrap"><canvas id="coefChart"></canvas></div>
+        <p class="hint">Intercept: ${MODEL.intercept}°F. Negative day_cos / day_sin coefficients capture seasonality; hdd/cdd (heating/cooling degree days) carry most of the temperature-regime signal.</p>
+      </div>
+      <div class="card">
+        <h3>Model Family Comparison (test set)</h3>
+        <table><thead><tr><th>Model</th><th>MAE</th><th>RMSE</th><th>R²</th></tr></thead><tbody>${compRows}</tbody></table>
+        <div class="chart-wrap" style="margin-top:14px;"><canvas id="modelCompareChart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="section-title">Live Predicted vs. Actual (last 90 days, this city)</div>
+    <div class="section-sub">Recreates the notebook's predicted-vs-actual check using the same formula, run against ${state.activeCity.name}'s recent archive — not the original Alpharetta test set, but the same model and math.</div>
+    <div class="grid g2">
+      <div class="card"><h3>Predicted vs. Actual Next-Day Mean Temp</h3><div class="chart-wrap tall"><canvas id="predActualChart"></canvas></div></div>
+      <div class="card"><h3>Residuals (Actual − Predicted)</h3><div class="chart-wrap tall"><canvas id="residChart"></canvas></div></div>
+    </div>
+    <div class="grid g4" style="margin-top:16px;" id="liveMetricBoxes"></div>
+  `;
+
+  destroyChart('coefChart');
+  state.charts['coefChart'] = new Chart(document.getElementById('coefChart'), {
+    type:'bar',
+    data:{labels:feats.map(f=>f[0]), datasets:[{data:feats.map(f=>f[1]), backgroundColor:feats.map(f=>f[1]<0?'#EF4444':'#2563EB')}]},
+    options: baseChartOpts({indexAxis:'y', plugins:{legend:{display:false}}})
+  });
+  destroyChart('modelCompareChart');
+  state.charts['modelCompareChart'] = new Chart(document.getElementById('modelCompareChart'), {
+    type:'bar',
+    data:{labels:MODEL.comparison.map(m=>m.model), datasets:[
+      {label:'MAE', data:MODEL.comparison.map(m=>m.mae), backgroundColor:'#2563EB'},
+      {label:'RMSE', data:MODEL.comparison.map(m=>m.rmse), backgroundColor:'#EF4444'}
+    ]}, options: baseChartOpts({scales:{x:{ticks:{color:chartColors().text, maxRotation:40, minRotation:20}}, y:{ticks:{color:chartColors().text}}}})
+  });
+
+  renderLivePredActual();
+}
+
+async function renderLivePredActual(){
+  const city = state.activeCity;
+  try{
+    if(!state.archiveCache[cityKey(city)]) await fetchArchive(city);
+    const daily = state.archiveCache[cityKey(city)].daily;
+    const n = daily.time.length;
+    const start = Math.max(9, n-91);
+    const preds = [], actuals = [], labels = [];
+    for(let i=start;i<n-1;i++){
+      const {features} = buildLiveFeatures(daily, i);
+      const p = runModel(features);
+      const actual = daily.temperature_2m_mean[i+1];
+      if(actual==null) continue;
+      preds.push(p); actuals.push(actual); labels.push(new Date(daily.time[i+1]).toLocaleDateString([], {month:'short', day:'numeric'}));
+    }
+    const errs = preds.map((p,i)=>actuals[i]-p);
+    const mae = mean(errs.map(Math.abs));
+    const rmse = Math.sqrt(mean(errs.map(e=>e*e)));
+    const ssRes = errs.reduce((s,e)=>s+e*e,0);
+    const meanA = mean(actuals);
+    const ssTot = actuals.reduce((s,a)=>s+(a-meanA)**2,0);
+    const r2 = 1-ssRes/ssTot;
+
+    destroyChart('predActualChart');
+    state.charts['predActualChart'] = new Chart(document.getElementById('predActualChart'), {
+      type:'line', data:{labels, datasets:[
+        {label:'Actual', data:actuals, borderColor:'#111', borderWidth:2.5, pointRadius:0},
+        {label:'Predicted', data:preds, borderColor:'#2563EB', borderWidth:2, borderDash:[4,3], pointRadius:0}
+      ]}, options: baseChartOpts({scales:{x:{ticks:{display:false}, grid:{display:false}}, y:{ticks:{color:chartColors().text}}}})
+    });
+    destroyChart('residChart');
+    state.charts['residChart'] = new Chart(document.getElementById('residChart'), {
+      type:'scatter', data:{datasets:[{data:errs.map((e,i)=>({x:i,y:e})), backgroundColor:'#8B5CF6', pointRadius:4}]},
+      options: baseChartOpts({plugins:{legend:{display:false}}, scales:{x:{ticks:{display:false}, grid:{display:false}}, y:{ticks:{color:chartColors().text}}}})
+    });
+    document.getElementById('liveMetricBoxes').innerHTML = `
+      <div class="card metric-box"><div class="v">${mae.toFixed(2)}°F</div><div class="l">Live MAE</div></div>
+      <div class="card metric-box"><div class="v">${rmse.toFixed(2)}°F</div><div class="l">Live RMSE</div></div>
+      <div class="card metric-box"><div class="v">${r2.toFixed(3)}</div><div class="l">Live R²</div></div>
+      <div class="card metric-box"><div class="v">${preds.length}</div><div class="l">Days Evaluated</div></div>
+    `;
+  }catch(e){
+    document.getElementById('liveMetricBoxes').innerHTML = `<p class="hint">Couldn't compute live evaluation for this city yet.</p>`;
+  }
+}
+
+/* ============================================================
+   RENDER: ACCURACY TAB (persistent forecast log)
+   ============================================================ */
+async function logForecast(city, forDateStr, aiPred, omPred){
+  const key = `wx-log-${cityKey(city)}-${forDateStr}`;
+  try{
+    const existing = await window.storage.get(key).catch(()=>null);
+    if(existing) return; // already logged
+    await window.storage.set(key, JSON.stringify({city:city.name, forDate:forDateStr, aiPred, omPred, loggedAt:Date.now()}));
+    // maintain an index of logged dates for this city
+    const idxKey = `wx-log-index-${cityKey(city)}`;
+    let idx = [];
+    try{ const r = await window.storage.get(idxKey); idx = r? JSON.parse(r.value): []; }catch(e){}
+    if(!idx.includes(forDateStr)){ idx.push(forDateStr); await window.storage.set(idxKey, JSON.stringify(idx)); }
+  }catch(e){ /* storage not available */ }
+}
+
+async function renderAccuracy(){
+  const el = document.getElementById('tab-accuracy');
+  el.innerHTML = `<div class="skel skel-block"></div>`;
+  const city = state.activeCity;
+  const idxKey = `wx-log-index-${cityKey(city)}`;
+  let idx = [];
+  try{ const r = await window.storage.get(idxKey); idx = r? JSON.parse(r.value): []; }catch(e){}
+
+  if(!idx.length){
+    el.innerHTML = `
+    <div class="card" style="text-align:center; padding:40px 20px;">
+      <h3 style="justify-content:center;">Building Accuracy History for ${city.name}</h3>
+      <p class="hint">Every time you open the <b>Today</b> tab, this dashboard logs the AI model's prediction and Open‑Meteo's<br>
+      forecast for tomorrow to persistent storage. Come back tomorrow (or later) and it will score both against what<br>
+      actually happened — no data logged yet for this city.</p>
+      <p class="hint" style="margin-top:14px;"><b>Note on Weather Underground:</b> a true 3‑way historical comparison isn't possible entirely
+      client‑side — Weather Underground's API requires a paid key and doesn't allow direct browser requests (no CORS), and it
+      doesn't expose an archive of past forecast runs to check against. This tracker instead compares the two sources that
+      <i>are</i> genuinely verifiable from the browser: my model vs. Open‑Meteo.</p>
+    </div>`;
+    return;
+  }
+
+  // fetch archive to resolve actuals
+  let arc;
+  try{ arc = state.archiveCache[cityKey(city)] || await fetchArchive(city); } catch(e){}
+  const archDaily = arc?.daily;
+  const liveDaily = state.liveCache[cityKey(city)]?.data?.daily;
+
+  const rows = [];
+  for(const dateStr of idx.sort()){
+    let rec;
+    try{ const r = await window.storage.get(`wx-log-${cityKey(city)}-${dateStr}`); rec = r? JSON.parse(r.value): null; } catch(e){ continue; }
+    if(!rec) continue;
+    const targetDate = new Date(dateStr); targetDate.setDate(targetDate.getDate()+1);
+    const targetStr = targetDate.toISOString().slice(0,10);
+    let actual = null;
+    if(archDaily){ const i = archDaily.time.indexOf(targetStr); if(i>=0) actual = archDaily.temperature_2m_mean[i]; }
+    if(actual==null && liveDaily){ const i = liveDaily.time.indexOf(targetStr); if(i>=0) actual = liveDaily.temperature_2m_mean[i]; }
+    rows.push({...rec, targetStr, actual});
+  }
+
+  const resolved = rows.filter(r=>r.actual!=null);
+  let html = `<div class="banner info"><div>📊</div><div>${resolved.length} of ${rows.length} logged forecasts resolved against actual observations for ${city.name}. Unresolved rows are still waiting on tomorrow's data.</div></div>`;
+
+  if(resolved.length){
+    const aiErrs = resolved.map(r=>Math.abs(r.actual-r.aiPred));
+    const omErrs = resolved.map(r=>Math.abs(r.actual-r.omPred));
+    const aiMae = mean(aiErrs), omMae = mean(omErrs);
+    const winner = aiMae<omMae ? "AI Model" : "Open‑Meteo";
+    html += `<div class="grid g4">
+      <div class="card metric-box"><div class="v">${aiMae.toFixed(2)}°F</div><div class="l">AI Model MAE</div></div>
+      <div class="card metric-box"><div class="v">${omMae.toFixed(2)}°F</div><div class="l">Open‑Meteo MAE</div></div>
+      <div class="card metric-box"><div class="v" style="color:var(--good);">${winner}</div><div class="l">Leading So Far</div></div>
+      <div class="card metric-box"><div class="v">${resolved.length}</div><div class="l">Days Tracked</div></div>
+    </div>
+    <div class="card" style="margin-top:16px;"><h3>Error Over Time</h3><div class="chart-wrap"><canvas id="accuracyChart"></canvas></div></div>`;
+  }
+
+  html += `<div class="card" style="margin-top:16px;"><h3>Forecast Log</h3>
+    <table><thead><tr><th>Made On</th><th>For Date</th><th>AI Pred</th><th>Open‑Meteo Pred</th><th>Actual</th><th>AI Error</th><th>OM Error</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr>
+      <td>${r.forDate}</td><td>${r.targetStr}</td>
+      <td>${r.aiPred.toFixed(1)}°F</td><td>${r.omPred.toFixed(1)}°F</td>
+      <td>${r.actual!=null? r.actual.toFixed(1)+'°F' : '<span style="color:var(--text3)">pending</span>'}</td>
+      <td>${r.actual!=null? Math.abs(r.actual-r.aiPred).toFixed(1)+'°F' : '—'}</td>
+      <td>${r.actual!=null? Math.abs(r.actual-r.omPred).toFixed(1)+'°F' : '—'}</td>
+    </tr>`).join('')}</tbody></table>
+  </div>`;
+
+  el.innerHTML = html;
+  if(resolved.length){
+    destroyChart('accuracyChart');
+    state.charts['accuracyChart'] = new Chart(document.getElementById('accuracyChart'), {
+      type:'line',
+      data:{labels:resolved.map(r=>r.targetStr), datasets:[
+        {label:'AI Error', data:resolved.map(r=>Math.abs(r.actual-r.aiPred)), borderColor:'#0a84ff', tension:.3},
+        {label:'Open‑Meteo Error', data:resolved.map(r=>Math.abs(r.actual-r.omPred)), borderColor:'#ff9f0a', tension:.3},
+      ]}, options: baseChartOpts()
+    });
+  }
+}
+
+/* ============================================================
+   RENDER: CITIES TAB
+   ============================================================ */
+function renderCities(){
+  const el = document.getElementById('tab-cities');
+  let html = `<div class="grid g2">`;
+  html += `<div class="card"><h3>Pinned Cities</h3>${state.cities.filter(c=>state.pinned.includes(c.name)).map(c=>cityRow(c,true)).join('') || '<p class="hint">None pinned.</p>'}</div>`;
+  html += `<div class="card"><h3>Recently Viewed</h3>${state.recent.filter(c=>!state.pinned.includes(c.name)).map(c=>cityRow(c,false)).join('') || '<p class="hint">Search for a city to see it appear here.</p>'}</div>`;
+  html += `</div>`;
+  el.innerHTML = html;
+  el.querySelectorAll('[data-star]').forEach(b=>b.onclick = ()=>togglePin(JSON.parse(b.dataset.star)));
+  el.querySelectorAll('[data-goto]').forEach(b=>b.onclick = ()=>selectCity(JSON.parse(b.dataset.goto)));
+}
+function cityRow(c, pinned){
+  return `<div class="day-row" style="grid-template-columns:1fr auto;">
+    <div style="cursor:pointer;" data-goto='${JSON.stringify(c)}'><b>${c.name}</b> <span class="lo">${c.admin1?c.admin1+', ':''}${c.country||''}</span></div>
+    <div class="star-btn ${pinned?'active':''}" data-star='${JSON.stringify(c)}'>${pinned?'★':'☆'}</div>
+  </div>`;
+}
+function togglePin(c){
+  if(state.pinned.includes(c.name)) state.pinned = state.pinned.filter(n=>n!==c.name);
+  else state.pinned.push(c.name);
+  savePrefs(); renderCityTabs(); renderCities();
+}
+
+/* ============================================================
+   NAVIGATION / CITY SWITCHING
+   ============================================================ */
+function renderCityTabs(){
+  const el = document.getElementById('cityTabs');
+  const pinnedCities = state.cities.filter(c=>state.pinned.includes(c.name));
+  el.innerHTML = pinnedCities.map(c=>`
+    <div class="city-pill ${c.name===state.activeCity.name?'active':''}" data-city='${JSON.stringify(c)}'>${c.name}</div>
+  `).join('');
+  el.querySelectorAll('.city-pill').forEach(p=>p.onclick = ()=>selectCity(JSON.parse(p.dataset.city)));
+}
+
+function selectCity(c){
+  state.activeCity = c;
+  if(!state.recent.some(r=>r.name===c.name && r.lat===c.lat)) state.recent.unshift(c);
+  state.recent = state.recent.slice(0,8);
+  if(!state.cities.some(x=>x.name===c.name && x.lat===c.lat)) state.cities.push(c);
+  savePrefs();
+  renderCityTabs();
+  renderActiveTab();
+}
+
+function renderActiveTab(){
+  document.querySelectorAll('[id^="tab-"]').forEach(t=>t.style.display='none');
+  document.getElementById('tab-'+state.activeTab).style.display='block';
+  if(state.activeTab==='today') renderToday();
+  else if(state.activeTab==='forecast') renderForecast();
+  else if(state.activeTab==='analytics') renderAnalytics();
+  else if(state.activeTab==='model') renderModel();
+  else if(state.activeTab==='accuracy') renderAccuracy();
+  else if(state.activeTab==='cities') renderCities();
+}
+
+/* ============================================================
+   INIT / EVENTS
+   ============================================================ */
+function applyTheme(){
+  document.documentElement.classList.toggle('dark', state.theme==='dark');
+  document.getElementById('themeIcon').innerHTML = state.theme==='dark'
+    ? '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'
+    : '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/>';
+}
+
+async function init(){
+  await loadPrefs();
+  applyTheme();
+  document.getElementById('unitBtn').textContent = '°'+state.unit;
+  if(!state.recent.length) state.recent = [];
+  if(!state.cities.some(c=>c.name===state.activeCity?.name)) state.activeCity = state.cities[0];
+  renderCityTabs();
+  renderActiveTab();
+
+  document.getElementById('themeBtn').onclick = ()=>{ state.theme = state.theme==='dark'?'light':'dark'; applyTheme(); savePrefs(); renderActiveTab(); };
+  document.getElementById('unitBtn').onclick = ()=>{ state.unit = state.unit==='F'?'C':'F'; document.getElementById('unitBtn').textContent='°'+state.unit; savePrefs(); renderActiveTab(); };
+  document.getElementById('refreshBtn').onclick = ()=>{ state.liveCache={}; renderActiveTab(); };
+
+  document.querySelectorAll('.nav-tab').forEach(t=>{
+    t.onclick = ()=>{
+      document.querySelectorAll('.nav-tab').forEach(x=>x.classList.remove('active'));
+      t.classList.add('active');
+      state.activeTab = t.dataset.tab;
+      renderActiveTab();
+    };
+  });
+
+  let searchTimeout;
+  const input = document.getElementById('citySearchInput');
+  const resultsEl = document.getElementById('searchResults');
+  input.addEventListener('input', ()=>{
+    clearTimeout(searchTimeout);
+    const q = input.value.trim();
+    if(q.length<2){ resultsEl.style.display='none'; return; }
+    searchTimeout = setTimeout(async ()=>{
+      try{
+        const results = await geocodeSearch(q);
+        if(!results.length){ resultsEl.innerHTML = `<div class="search-result-item">No matches</div>`; resultsEl.style.display='block'; return; }
+        resultsEl.innerHTML = results.map(r=>`<div class="search-result-item" data-c='${JSON.stringify(r)}'><span>${r.name}</span><span class="sub">${[r.admin1,r.country].filter(Boolean).join(', ')}</span></div>`).join('');
+        resultsEl.style.display='block';
+        resultsEl.querySelectorAll('.search-result-item[data-c]').forEach(it=>{
+          it.onclick = ()=>{ selectCity(JSON.parse(it.dataset.c)); resultsEl.style.display='none'; input.value=''; };
+        });
+      }catch(e){ resultsEl.innerHTML = `<div class="search-result-item">Search failed</div>`; resultsEl.style.display='block'; }
+    }, 380);
+  });
+  document.addEventListener('click', (e)=>{ if(!e.target.closest('.city-search-wrap')) resultsEl.style.display='none'; });
+}
+
+init();
+</script>
+</body>
+</html>

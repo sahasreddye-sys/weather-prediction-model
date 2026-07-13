@@ -792,6 +792,7 @@ function quantile(sorted, q){
 
 function renderAnalyticsBody(){
   const city = state.activeCity;
+  const el = document.getElementById('tab-analytics');
   const arc = state.archiveCache[cityKey(city)].daily;
   const dates = arc.time.map(t=>new Date(t));
   const tmax = arc.temperature_2m_max, tmin = arc.temperature_2m_min, tmean = arc.temperature_2m_mean;

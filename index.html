@@ -411,8 +411,10 @@ async function fetchLive(city){
 async function fetchArchive(city){
   const key = cityKey(city);
   if(state.archiveCache[key]) return state.archiveCache[key];
-  // ERA5 reanalysis typically lags ~5 days behind real-time; back off further to avoid a run of nulls
-  const end = new Date(); end.setDate(end.getDate()-6);
+  // Exactly 2 years ago through today. Note: ERA5 reanalysis (the archive API's data source)
+  // typically lags real-time by ~5 days, so the last few days may come back null — that's expected
+  // and already handled gracefully wherever this data is used (nulls are skipped, not treated as errors).
+  const end = new Date();
   const start = new Date(end); start.setFullYear(start.getFullYear()-2);
   const fmt = d=>d.toISOString().slice(0,10);
   const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${city.lat}&longitude=${city.lon}` +
